@@ -2,7 +2,7 @@ all: build
 .PHONY: all build
 
 BUILD_IMAGE ?= colonyos/dockerexecutor
-PUSH_IMAGE ?= colonyos/dockerexecutor:v1.0.3
+PUSH_IMAGE ?= colonyos/dockerexecutor:v1.0.4
 
 VERSION := $(shell git rev-parse --short HEAD)
 BUILDTIME := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
