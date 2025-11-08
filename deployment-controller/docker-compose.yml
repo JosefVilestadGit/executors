@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  deployment-controller:
+    build:
+      context: ..
+      dockerfile: deployment-controller/Dockerfile
+    container_name: deployment-controller
+    restart: unless-stopped
+    volumes:
+      # Mount Docker socket to manage containers on the host
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+    env_file:
+      - .env
+    environment:
+      # ColonyOS server connection (can be overridden in .env)
+      COLONIES_SERVER_HOST: ${COLONIES_SERVER_HOST:-localhost}
+      COLONIES_SERVER_PORT: ${COLONIES_SERVER_PORT:-50080}
+      COLONIES_INSECURE: ${COLONIES_INSECURE:-true}
+
+      # Colony information (can be overridden in .env)
+      COLONIES_COLONY_NAME: ${COLONIES_COLONY_NAME:-dev}
+      COLONIES_COLONY_PRVKEY: ${COLONIES_COLONY_PRVKEY:-}
+
+      # Executor configuration (can be overridden in .env)
+      COLONIES_EXECUTOR_NAME: ${COLONIES_EXECUTOR_NAME:-deployment-controller-1}
+      COLONIES_EXECUTOR_TYPE: ${COLONIES_EXECUTOR_TYPE:-deployment-controller}
+    networks:
+      - colonies-network
+
+networks:
+  colonies-network:
+    external: true
+    # If the network doesn't exist, create it with:
+    # docker network create colonies-network
