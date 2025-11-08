@@ -126,16 +126,16 @@ func (r *Reconciler) generateUniqueExecutorName(colonyName, baseExecutorName str
 	return "", fmt.Errorf("failed to generate unique executor name after %d retries", maxRetries)
 }
 
-// Reconcile processes an ExecutorDeployment resource and ensures the desired state
-func (r *Reconciler) Reconcile(process *core.Process, resource *core.Resource) error {
+// Reconcile processes an ExecutorDeployment service and ensures the desired state
+func (r *Reconciler) Reconcile(process *core.Process, service *core.Service) error {
 	log.WithFields(log.Fields{
-		"ResourceName": resource.Metadata.Name,
-		"ResourceKind": resource.Kind,
+		"ResourceName": service.Metadata.Name,
+		"ResourceKind": service.Kind,
 	}).Info("Starting reconciliation")
 
 	// Parse the deployment spec
 	var spec DeploymentSpec
-	specBytes, err := json.Marshal(resource.Spec)
+	specBytes, err := json.Marshal(service.Spec)
 	if err != nil {
 		return fmt.Errorf("failed to marshal spec: %w", err)
 	}
@@ -158,7 +158,7 @@ func (r *Reconciler) Reconcile(process *core.Process, resource *core.Resource) e
 	}).Info("Reconciling deployment")
 
 	// Add logs to the process
-	r.addLog(process, fmt.Sprintf("Reconciling ExecutorDeployment: %s", resource.Metadata.Name))
+	r.addLog(process, fmt.Sprintf("Reconciling ExecutorDeployment: %s", service.Metadata.Name))
 	r.addLog(process, fmt.Sprintf("Image: %s, Replicas: %d", spec.Image, spec.Replicas))
 
 	// Pull the container image
@@ -167,7 +167,7 @@ func (r *Reconciler) Reconcile(process *core.Process, resource *core.Resource) e
 	}
 
 	// Get currently running containers for this deployment
-	existingContainers, err := r.listContainersByLabel(resource.Metadata.Name)
+	existingContainers, err := r.listContainersByLabel(service.Metadata.Name)
 	if err != nil {
 		r.addLog(process, fmt.Sprintf("Warning: Failed to list existing containers: %v", err))
 		existingContainers = []string{} // Continue with empty list
@@ -186,7 +186,7 @@ func (r *Reconciler) Reconcile(process *core.Process, resource *core.Resource) e
 			// Generate unique executor name that will be used as both container name and executor name
 			var containerName string
 			if spec.ExecutorName != "" {
-				uniqueExecutorName, err := r.generateUniqueExecutorName(resource.Metadata.Namespace, spec.ExecutorName)
+				uniqueExecutorName, err := r.generateUniqueExecutorName(service.Metadata.Namespace, spec.ExecutorName)
 				if err != nil {
 					r.addLog(process, fmt.Sprintf("Error generating unique executor name: %v", err))
 					return fmt.Errorf("failed to generate unique executor name: %w", err)
@@ -194,10 +194,10 @@ func (r *Reconciler) Reconcile(process *core.Process, resource *core.Resource) e
 				containerName = uniqueExecutorName
 			} else {
 				// For non-executor deployments, use index-based naming
-				containerName = fmt.Sprintf("%s-%d", resource.Metadata.Name, currentReplicas+i)
+				containerName = fmt.Sprintf("%s-%d", service.Metadata.Name, currentReplicas+i)
 			}
 
-			if err := r.startContainer(process, spec, containerName, resource.Metadata.Name, resource.Metadata.Namespace); err != nil {
+			if err := r.startContainer(process, spec, containerName, service.Metadata.Name, service.Metadata.Namespace); err != nil {
 				r.addLog(process, fmt.Sprintf("Error starting container %s: %v", containerName, err))
 				return fmt.Errorf("failed to start container %s: %w", containerName, err)
 			}
@@ -224,15 +224,15 @@ func (r *Reconciler) Reconcile(process *core.Process, resource *core.Resource) e
 	return nil
 }
 
-// CollectStatus gathers current status of containers for a resource
-func (r *Reconciler) CollectStatus(resource *core.Resource) (map[string]interface{}, error) {
+// CollectStatus gathers current status of instances for a service
+func (r *Reconciler) CollectStatus(service *core.Service) (map[string]interface{}, error) {
 	// Get list of containers for this deployment
-	containerIDs, err := r.listContainersByLabel(resource.Metadata.Name)
+	containerIDs, err := r.listContainersByLabel(service.Metadata.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
 
-	containers := make([]map[string]interface{}, 0)
+	instances := make([]map[string]interface{}, 0)
 	running := 0
 	stopped := 0
 
@@ -257,22 +257,23 @@ func (r *Reconciler) CollectStatus(resource *core.Resource) (map[string]interfac
 			containerName = containerName[1:]
 		}
 
-		containers = append(containers, map[string]interface{}{
-			"id":         inspect.ID[:12], // Short ID
-			"name":       containerName,
-			"state":      state,
-			"created":    inspect.Created,
-			"image":      inspect.Config.Image,
-			"lastCheck":  time.Now().Format(time.RFC3339),
+		instances = append(instances, map[string]interface{}{
+			"id":        inspect.ID[:12], // Short ID
+			"name":      containerName,
+			"type":      "container",
+			"state":     state,
+			"created":   inspect.Created,
+			"image":     inspect.Config.Image,
+			"lastCheck": time.Now().Format(time.RFC3339),
 		})
 	}
 
 	return map[string]interface{}{
-		"containers":      containers,
-		"runningReplicas": running,
-		"stoppedReplicas": stopped,
-		"totalReplicas":   len(containers),
-		"lastUpdated":     time.Now().Format(time.RFC3339),
+		"instances":        instances,
+		"runningInstances": running,
+		"stoppedInstances": stopped,
+		"totalInstances":   len(instances),
+		"lastUpdated":      time.Now().Format(time.RFC3339),
 	}, nil
 }
 

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/colonyos/executors/docker-executor-reconciler/internal/cli"
-	"github.com/colonyos/executors/docker-executor-reconciler/pkg/build"
+	"github.com/colonyos/executors/docker-reconciler/internal/cli"
+	"github.com/colonyos/executors/docker-reconciler/pkg/build"
 )
 
 var (

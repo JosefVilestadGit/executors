@@ -68,7 +68,7 @@ if spec.ExecutorName != "" {
 
 ```bash
 # Deploy 3 docker executor replicas
-colonies resource add --spec examples/docker-executor-deployment.json
+colonies service add --spec examples/docker-executor-deployment.json
 ```
 
 The deployment spec:
@@ -204,7 +204,7 @@ make container
 docker-compose restart deployment-controller
 
 # 2. Create deployment
-colonies resource add --spec examples/docker-executor-deployment.json
+colonies service add --spec examples/docker-executor-deployment.json
 
 # 3. Watch logs
 docker-compose logs -f deployment-controller

@@ -2,11 +2,11 @@
 
 ## What Is It?
 
-A **reconciliation executor** for ColonyOS that manages Docker container deployments declaratively, similar to Kubernetes controllers. It watches for `ExecutorDeployment` resources and ensures containers match the desired state.
+A **reconciliation executor** for ColonyOS that manages Docker container deployments declaratively, similar to Kubernetes controllers. It watches for `ExecutorDeployment` services and ensures containers match the desired state.
 
 ## 🎯 Key Features
 
-- **Declarative Management**: Define desired state via JSON resources
+- **Declarative Management**: Define desired state via JSON services
 - **Automatic Reconciliation**: Continuously syncs actual vs. desired state
 - **Dynamic Scaling**: Scales containers up/down based on replica count
 - **Label-Based Tracking**: Uses Docker labels to manage containers
@@ -54,8 +54,8 @@ docker-compose logs -f
 
 ```
 ┌─────────────────────┐
-│  ExecutorDeployment │  User creates/updates resource
-│     Resource        │  (defines: image, replicas, env, etc.)
+│  ExecutorDeployment │  User creates/updates service
+│     Service        │  (defines: image, replicas, env, etc.)
 └──────────┬──────────┘
            │
            ▼
@@ -65,7 +65,7 @@ docker-compose logs -f
            │
            ▼
 ┌─────────────────────┐
-│ Deployment          │  Receives process with embedded resource
+│ Deployment          │  Receives process with embedded service
 │ Controller          │
 │ (This Executor)     │
 └──────────┬──────────┘
@@ -204,9 +204,9 @@ docker logs web-server-0
 ### Scale a Deployment
 
 ```bash
-# Edit the resource to change replicas
+# Edit the service to change replicas
 # The controller will automatically reconcile
-colonies resource update --spec deployment.json
+colonies service update --spec deployment.json
 ```
 
 ### Stop the Controller
@@ -241,9 +241,9 @@ Choose your path:
 - [ ] Configure `.env` with real credentials
 - [ ] Set `COLONIES_INSECURE=false` for production
 - [ ] Use proper TLS certificates for ColonyOS server
-- [ ] Restrict who can create ExecutorDeployment resources
+- [ ] Restrict who can create ExecutorDeployment services
 - [ ] Set up monitoring and alerting
-- [ ] Configure resource limits in docker-compose.yml
+- [ ] Configure service limits in docker-compose.yml
 - [ ] Regular backups of `.env` file
 - [ ] Review security best practices in DOCKER-DEPLOYMENT.md
 
@@ -283,10 +283,10 @@ Current limitations:
 Planned features:
 - [ ] Volume mounts
 - [ ] Health checks
-- [ ] Resource limits enforcement
+- [ ] Service limits enforcement
 - [ ] Network configuration
 - [ ] Rolling updates
-- [ ] Status reporting to resource
+- [ ] Status reporting to service
 - [ ] Multi-runtime support (Podman, containerd)
 
 ## 📄 License

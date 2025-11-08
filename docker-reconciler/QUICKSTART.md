@@ -58,12 +58,12 @@ INFO Self-registered
 
 1. Register the ResourceDefinition (colony owner only):
 ```bash
-colonies resource definition add --spec examples/resources/executor-deployment-definition.json
+colonies service definition add --spec examples/services/executor-deployment-definition.json
 ```
 
 2. Create a deployment:
 ```bash
-colonies resource add --spec examples/nginx-deployment.json
+colonies service add --spec examples/nginx-deployment.json
 ```
 
 3. Check managed containers:

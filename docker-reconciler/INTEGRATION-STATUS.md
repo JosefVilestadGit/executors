@@ -8,8 +8,8 @@ The deployment-controller executor has been successfully implemented, integrated
 
 - ✅ Deployment controller builds successfully
 - ✅ Container starts and registers with ColonyOS
-- ✅ Resource definitions can be created
-- ✅ Resources can be added/updated/removed
+- ✅ Service definitions can be created
+- ✅ Services can be added/updated/removed
 - ✅ Reconciliation processes are triggered
 - ✅ Docker integration works (can create/manage containers)
 - ✅ Label-based container tracking works
@@ -23,15 +23,15 @@ The deployment-controller executor has been successfully implemented, integrated
 
 ## Fixed Issues ✅
 
-### 1. Resource Attachment to Processes (FIXED)
+### 1. Service Attachment to Processes (FIXED)
 
-**Original Issue**: Executor expected `process.FunctionSpec.Resource` but server was setting `process.FunctionSpec.Reconciliation`.
+**Original Issue**: Executor expected `process.FunctionSpec.Service` but server was setting `process.FunctionSpec.Reconciliation`.
 
-**Solution**: Updated executor to use `process.FunctionSpec.Reconciliation` which contains both `Old` and `New` resource states plus the reconciliation action (create/update/delete). This is actually a better design as it provides more context.
+**Solution**: Updated executor to use `process.FunctionSpec.Reconciliation` which contains both `Old` and `New` service states plus the reconciliation action (create/update/delete). This is actually a better design as it provides more context.
 
 **Code Change**:
 ```go
-// executor.go - Now uses Reconciliation instead of Resource
+// executor.go - Now uses Reconciliation instead of Service
 if process.FunctionSpec.Reconciliation == nil {
     e.failProcess(process, "No reconciliation data found in process FunctionSpec")
     return
@@ -40,7 +40,7 @@ if process.FunctionSpec.Reconciliation == nil {
 reconciliation := process.FunctionSpec.Reconciliation
 // For create/update, use reconciliation.New
 // For delete, use reconciliation.Old
-resource := reconciliation.New
+service := reconciliation.New
 ```
 
 ### 2. Container Detection Bug (FIXED)
@@ -54,25 +54,25 @@ resource := reconciliation.New
 **Code Change**:
 ```go
 // Before (incorrect):
-deploymentLabel := fmt.Sprintf("colonies.deployment=%s", resource.Metadata.Name)
+deploymentLabel := fmt.Sprintf("colonies.deployment=%s", service.Metadata.Name)
 existingContainers, err := r.listContainersByLabel(deploymentLabel)
 
 // After (correct):
-existingContainers, err := r.listContainersByLabel(resource.Metadata.Name)
+existingContainers, err := r.listContainersByLabel(service.Metadata.Name)
 ```
 
 ## Required Server Changes
 
-The ColonyOS server needs to be updated to support resource reconciliation:
+The ColonyOS server needs to be updated to support service reconciliation:
 
-### 1. Update Process Creation for Resources
+### 1. Update Process Creation for Services
 
-**Location**: `pkg/server/resource_handler.go` (or wherever resources create processes)
+**Location**: `pkg/server/resource_handler.go` (or wherever services create processes)
 
 **Change Required**:
 ```go
-// When creating a reconciliation process from a resource
-func (server *ColoniesServer) createReconciliationProcess(resource *core.Resource, def *core.ResourceDefinition) (*core.Process, error) {
+// When creating a reconciliation process from a service
+func (server *ColoniesServer) createReconciliationProcess(service *core.Service, def *core.ResourceDefinition) (*core.Process, error) {
     funcSpec := core.CreateFunctionSpec(
         def.Spec.Handler.FunctionName,  // "reconcile"
         "",                               // nodeName
@@ -84,14 +84,14 @@ func (server *ColoniesServer) createReconciliationProcess(resource *core.Resourc
         3,                                // maxretries
     )
 
-    // ⭐ THIS IS THE KEY CHANGE - Attach the resource to the FunctionSpec
-    funcSpec.Resource = resource
+    // ⭐ THIS IS THE KEY CHANGE - Attach the service to the FunctionSpec
+    funcSpec.Service = service
 
     // Set conditions to target the right executor type
     funcSpec.Conditions.ExecutorType = def.Spec.Handler.ExecutorType
 
     // Create and submit the process
-    process, err := server.createProcess(funcSpec, resource.Metadata.Namespace)
+    process, err := server.createProcess(funcSpec, service.Metadata.Namespace)
     if err != nil {
         return nil, err
     }
@@ -100,28 +100,28 @@ func (server *ColoniesServer) createReconciliationProcess(resource *core.Resourc
 }
 ```
 
-### 2. Trigger on Resource Operations
+### 2. Trigger on Service Operations
 
 **Triggers needed**:
-- When resource is **added**: Create reconciliation process
-- When resource is **updated**: Create reconciliation process
-- When resource is **deleted**: Optional cleanup process
+- When service is **added**: Create reconciliation process
+- When service is **updated**: Create reconciliation process
+- When service is **deleted**: Optional cleanup process
 
 **Example**:
 ```go
 // In AddResource handler
-func (server *ColoniesServer) AddResource(resource *core.Resource) error {
-    // ... validate and store resource ...
+func (server *ColoniesServer) AddResource(service *core.Service) error {
+    // ... validate and store service ...
 
-    // Get the resource definition
-    def, err := server.GetResourceDefinition(resource.Kind)
+    // Get the service definition
+    def, err := server.GetResourceDefinition(service.Kind)
     if err != nil {
         return err
     }
 
     // If definition has a handler, trigger reconciliation
     if def.Spec.Handler != nil && def.Spec.Handler.ExecutorType != "" {
-        _, err = server.createReconciliationProcess(resource, def)
+        _, err = server.createReconciliationProcess(service, def)
         if err != nil {
             log.WithFields(log.Fields{"Error": err}).Warning("Failed to create reconciliation process")
         }
@@ -133,12 +133,12 @@ func (server *ColoniesServer) AddResource(resource *core.Resource) error {
 
 ### 3. Update FunctionSpec Serialization
 
-Ensure the `Resource` field is properly serialized/deserialized when processes are assigned to executors.
+Ensure the `Service` field is properly serialized/deserialized when processes are assigned to executors.
 
 **Check locations**:
-- `pkg/core/function_spec.go` - Ensure Resource field is in JSON tags
-- `pkg/rpc/assign.go` - Ensure Resource is included in process assignment RPC
-- `pkg/client/process_client.go` - Ensure Resource is included in client parsing
+- `pkg/core/function_spec.go` - Ensure Service field is in JSON tags
+- `pkg/rpc/assign.go` - Ensure Service is included in process assignment RPC
+- `pkg/client/process_client.go` - Ensure Service is included in client parsing
 
 ## Testing the Integration
 
@@ -148,11 +148,11 @@ Once server changes are made:
 # 1. Start environment
 docker-compose up -d
 
-# 2. Register resource definition
-colonies resource definition add --spec examples/executor-deployment-definition.json
+# 2. Register service definition
+colonies service definition add --spec examples/executor-deployment-definition.json
 
 # 3. Create deployment
-colonies resource add --spec examples/nginx-deployment.json
+colonies service add --spec examples/nginx-deployment.json
 
 # 4. Verify reconciliation succeeded
 docker-compose logs deployment-controller | grep "Reconciliation completed"
@@ -163,7 +163,7 @@ docker ps --filter "label=colonies.deployment=nginx-deployment"
 
 # 6. Scale up
 # Edit nginx-deployment.json to have replicas: 5
-colonies resource update --spec examples/nginx-deployment.json
+colonies service update --spec examples/nginx-deployment.json
 
 # 7. Verify scaling
 docker ps --filter "label=colonies.deployment=nginx-deployment" | wc -l
@@ -175,29 +175,29 @@ docker ps --filter "label=colonies.deployment=nginx-deployment" | wc -l
 Until server changes are implemented, you can manually trigger reconciliation:
 
 ```bash
-# Create a FunctionSpec with the resource embedded
+# Create a FunctionSpec with the service embedded
 colonies function submit \
   --funcname reconcile \
   --executor-type deployment-controller \
   --spec <deployment-spec-json>
 ```
 
-However, this is not ideal as it requires manual intervention and doesn't support automatic reconciliation on resource changes.
+However, this is not ideal as it requires manual intervention and doesn't support automatic reconciliation on service changes.
 
 ## Implementation Checklist for Server
 
-- [ ] Add `Resource *Resource` field support in process creation
+- [ ] Add `Service *Service` field support in process creation
 - [ ] Implement `createReconciliationProcess()` function
-- [ ] Hook resource add/update/delete to trigger reconciliation
-- [ ] Ensure Resource is serialized in RPC messages
-- [ ] Add tests for resource-to-process integration
+- [ ] Hook service add/update/delete to trigger reconciliation
+- [ ] Ensure Service is serialized in RPC messages
+- [ ] Add tests for service-to-process integration
 - [ ] Update documentation
 
 ## Files to Modify in colonies/pkg
 
-1. **pkg/core/function_spec.go** - Ensure Resource field exists (✅ already exists)
+1. **pkg/core/function_spec.go** - Ensure Service field exists (✅ already exists)
 2. **pkg/server/resource_handler.go** - Add reconciliation triggering
-3. **pkg/rpc/process.go** - Ensure Resource is serialized
+3. **pkg/rpc/process.go** - Ensure Service is serialized
 4. **pkg/database/postgresql/resource_db.go** - May need updates
 
 ## Executor Status: Ready ✅

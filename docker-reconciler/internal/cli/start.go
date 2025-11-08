@@ -5,8 +5,8 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/colonyos/executors/docker-executor-reconciler/pkg/build"
-	"github.com/colonyos/executors/docker-executor-reconciler/pkg/executor"
+	"github.com/colonyos/executors/docker-reconciler/pkg/build"
+	"github.com/colonyos/executors/docker-reconciler/pkg/executor"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )

@@ -1,4 +1,4 @@
-module github.com/colonyos/executors/docker-executor-reconciler
+module github.com/colonyos/executors/docker-reconciler
 
 go 1.25
 
@@ -13,6 +13,8 @@ require (
 )
 
 replace github.com/colonyos/executors/common v0.0.4 => ../common/
+
+replace github.com/colonyos/colonies v1.9.0 => /home/johan/dev/github/colonyos/colonies/
 
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 // indirect

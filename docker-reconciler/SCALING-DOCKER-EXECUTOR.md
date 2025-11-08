@@ -63,7 +63,7 @@ services:
 ## Key Management
 
 ### Current Approach (Development)
-Keys are embedded in the resource spec:
+Keys are embedded in the service spec:
 ```json
 {
   "spec": {
@@ -75,11 +75,11 @@ Keys are embedded in the resource spec:
 ```
 
 **Pros**: Simple, no additional infrastructure
-**Cons**: Keys visible in resource specs, not secure for production
+**Cons**: Keys visible in service specs, not secure for production
 
 ### Recommended Approach (Production)
 
-Implement a **Secret** resource type in ColonyOS:
+Implement a **Secret** service type in ColonyOS:
 
 ```json
 {
@@ -161,7 +161,7 @@ cat > /tmp/deployment-scaled.json <<EOF
 }
 EOF
 
-colonies resource update --spec /tmp/deployment-scaled.json
+colonies service update --spec /tmp/deployment-scaled.json
 ```
 
 ### Scale Down
@@ -181,7 +181,7 @@ cat > /tmp/deployment-scaled.json <<EOF
 }
 EOF
 
-colonies resource update --spec /tmp/deployment-scaled.json
+colonies service update --spec /tmp/deployment-scaled.json
 ```
 
 ### Verify

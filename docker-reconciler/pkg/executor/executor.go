@@ -12,7 +12,7 @@ import (
 	"github.com/colonyos/colonies/pkg/client"
 	"github.com/colonyos/colonies/pkg/core"
 	"github.com/colonyos/colonies/pkg/security/crypto"
-	"github.com/colonyos/executors/docker-executor-reconciler/pkg/reconciler"
+	"github.com/colonyos/executors/docker-reconciler/pkg/reconciler"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -31,7 +31,7 @@ type Executor struct {
 	cancel             context.CancelFunc
 	client             *client.ColoniesClient
 	reconciler         *reconciler.Reconciler
-	managedResources   map[string]*core.Resource // resourceID -> resource
+	managedResources   map[string]*core.Service // resourceID -> service
 	resourcesMutex     sync.RWMutex
 }
 
@@ -116,7 +116,7 @@ func (e *Executor) createColoniesExecutorWithKey(colonyName string) (*core.Execu
 
 func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
 	e := &Executor{
-		managedResources: make(map[string]*core.Resource),
+		managedResources: make(map[string]*core.Service),
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -182,9 +182,6 @@ func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
 		"ExecutorPrvKey":     "***********************",
 		"ExecutorType":       e.executorType}).
 		Info("Deployment Controller Executor started")
-
-	// Start periodic status update goroutine
-	go e.periodicStatusUpdate()
 
 	return e, nil
 }
@@ -259,51 +256,51 @@ func (e *Executor) handleReconcile(process *core.Process) {
 
 	reconciliation := process.FunctionSpec.Reconciliation
 
-	// For deployment-controller, we work with the "New" resource (the desired state)
-	// The reconciliation.New contains the current/desired resource state
+	// For deployment-controller, we work with the "New" service (the desired state)
+	// The reconciliation.New contains the current/desired service state
 	// The reconciliation.Old contains the previous state (nil for create, set for update)
-	var resource *core.Resource
+	var service *core.Service
 	if reconciliation.New != nil {
-		resource = reconciliation.New
+		service = reconciliation.New
 	} else if reconciliation.Old != nil {
 		// For delete operations, Old is set and New is nil
-		resource = reconciliation.Old
+		service = reconciliation.Old
 	} else {
-		e.failProcess(process, "No resource found in reconciliation data")
+		e.failProcess(process, "No service found in reconciliation data")
 		return
 	}
 
 	log.WithFields(log.Fields{
-		"ResourceName": resource.Metadata.Name,
-		"ResourceKind": resource.Kind,
+		"ResourceName": service.Metadata.Name,
+		"ResourceKind": service.Kind,
 		"Action":       reconciliation.Action,
-	}).Info("Processing resource reconciliation")
+	}).Info("Processing service reconciliation")
 
 	// Perform reconciliation
-	if err := e.reconciler.Reconcile(process, resource); err != nil {
+	if err := e.reconciler.Reconcile(process, service); err != nil {
 		e.failProcess(process, "Reconciliation failed: "+err.Error())
 		return
 	}
 
-	// Track or untrack the resource based on the action
+	// Track or untrack the service based on the action
 	if reconciliation.Action == "delete" {
-		// Remove from managed resources
+		// Remove from managed services
 		e.resourcesMutex.Lock()
-		delete(e.managedResources, resource.ID)
+		delete(e.managedResources, service.ID)
 		e.resourcesMutex.Unlock()
-		log.WithFields(log.Fields{"ResourceID": resource.ID, "ResourceName": resource.Metadata.Name}).Info("Removed resource from managed resources")
+		log.WithFields(log.Fields{"ResourceID": service.ID, "ResourceName": service.Metadata.Name}).Info("Removed service from managed services")
 	} else {
-		// Add/update in managed resources (for create and update actions)
+		// Add/update in managed services (for create and update actions)
 		e.resourcesMutex.Lock()
-		e.managedResources[resource.ID] = resource
+		e.managedResources[service.ID] = service
 		e.resourcesMutex.Unlock()
-		log.WithFields(log.Fields{"ResourceID": resource.ID, "ResourceName": resource.Metadata.Name}).Info("Added/updated resource in managed resources")
+		log.WithFields(log.Fields{"ResourceID": service.ID, "ResourceName": service.Metadata.Name}).Info("Added/updated service in managed services")
 	}
 
 	// Collect status after successful reconciliation
-	status, err := e.reconciler.CollectStatus(resource)
+	status, err := e.reconciler.CollectStatus(service)
 	if err != nil {
-		log.WithFields(log.Fields{"Error": err, "ResourceName": resource.Metadata.Name}).Warn("Failed to collect resource status")
+		log.WithFields(log.Fields{"Error": err, "ResourceName": service.Metadata.Name}).Warn("Failed to collect service status")
 		// Don't fail the process - reconciliation succeeded, status collection is best-effort
 		// Close without status output
 		if err := e.client.Close(process.ID, e.executorPrvKey); err != nil {
@@ -312,7 +309,7 @@ func (e *Executor) handleReconcile(process *core.Process) {
 			log.WithFields(log.Fields{"ProcessID": process.ID}).Info("Process completed successfully")
 		}
 	} else {
-		// Close the process with status output so the server can update the resource
+		// Close the process with status output so the server can update the service
 		output := []interface{}{
 			map[string]interface{}{
 				"status": status,
@@ -323,8 +320,8 @@ func (e *Executor) handleReconcile(process *core.Process) {
 		} else {
 			log.WithFields(log.Fields{
 				"ProcessID":      process.ID,
-				"ResourceName":   resource.Metadata.Name,
-				"TotalReplicas": status["totalReplicas"],
+				"ResourceName":   service.Metadata.Name,
+				"TotalInstances": status["totalInstances"],
 			}).Info("Process completed successfully with status update")
 		}
 	}
@@ -336,77 +333,4 @@ func (e *Executor) failProcess(process *core.Process, reason string) {
 	if err != nil {
 		log.WithFields(log.Fields{"ProcessID": process.ID, "Error": err}).Error("Failed to mark process as failed")
 	}
-}
-
-// periodicStatusUpdate runs in a goroutine and updates status for all managed resources every 10 seconds
-func (e *Executor) periodicStatusUpdate() {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-e.ctx.Done():
-			log.Info("Stopping periodic status updates")
-			return
-		case <-ticker.C:
-			e.updateAllResourceStatuses()
-		}
-	}
-}
-
-// updateAllResourceStatuses updates status for all managed resources
-func (e *Executor) updateAllResourceStatuses() {
-	e.resourcesMutex.RLock()
-	resources := make([]*core.Resource, 0, len(e.managedResources))
-	for _, resource := range e.managedResources {
-		resources = append(resources, resource)
-	}
-	e.resourcesMutex.RUnlock()
-
-	for _, resource := range resources {
-		e.updateResourceStatus(resource)
-	}
-}
-
-// updateResourceStatus collects and updates the status for a single resource
-func (e *Executor) updateResourceStatus(resource *core.Resource) {
-	// Collect current status
-	status, err := e.reconciler.CollectStatus(resource)
-	if err != nil {
-		log.WithFields(log.Fields{
-			"Error":        err,
-			"ResourceName": resource.Metadata.Name,
-			"ResourceID":   resource.ID,
-		}).Warn("Failed to collect resource status during periodic update")
-		return
-	}
-
-	// Get the latest version of the resource from the server
-	latestResource, err := e.client.GetResource(e.colonyName, resource.Metadata.Name, e.executorPrvKey)
-	if err != nil {
-		log.WithFields(log.Fields{
-			"Error":        err,
-			"ResourceName": resource.Metadata.Name,
-		}).Warn("Failed to get latest resource during periodic update")
-		return
-	}
-
-	// Update only the status field
-	latestResource.Status = status
-
-	// Send the update to the server
-	_, err = e.client.UpdateResource(latestResource, e.executorPrvKey)
-	if err != nil {
-		log.WithFields(log.Fields{
-			"Error":        err,
-			"ResourceName": resource.Metadata.Name,
-		}).Warn("Failed to update resource status during periodic update")
-		return
-	}
-
-	log.WithFields(log.Fields{
-		"ResourceName":   resource.Metadata.Name,
-		"TotalReplicas":  status["totalReplicas"],
-		"RunningReplicas": status["runningReplicas"],
-	}).Debug("Updated resource status")
 }

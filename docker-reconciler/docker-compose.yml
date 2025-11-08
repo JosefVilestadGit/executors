@@ -1,11 +1,11 @@
 version: '3.8'
 
 services:
-  deployment-controller:
+  docker-executor-reconciler:
     build:
       context: ..
-      dockerfile: deployment-controller/Dockerfile
-    container_name: deployment-controller
+      dockerfile: docker-executor-reconciler/Dockerfile
+    container_name: docker-executor-reconciler
     restart: unless-stopped
     volumes:
       # Mount Docker socket to manage containers on the host
@@ -23,8 +23,8 @@ services:
       COLONIES_COLONY_PRVKEY: ${COLONIES_COLONY_PRVKEY:-}
 
       # Executor configuration (can be overridden in .env)
-      COLONIES_EXECUTOR_NAME: ${COLONIES_EXECUTOR_NAME:-deployment-controller-1}
-      COLONIES_EXECUTOR_TYPE: ${COLONIES_EXECUTOR_TYPE:-deployment-controller}
+      COLONIES_EXECUTOR_NAME: ${COLONIES_EXECUTOR_NAME:-docker-executor-reconciler-1}
+      COLONIES_EXECUTOR_TYPE: ${COLONIES_EXECUTOR_TYPE:-docker-executor-reconciler}
     networks:
       - colonies-network
 

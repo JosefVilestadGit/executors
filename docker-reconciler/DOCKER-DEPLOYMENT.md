@@ -12,12 +12,12 @@ This guide covers running the deployment controller executor as a Docker contain
 
 ⚠️ **Important**: The deployment controller requires access to the Docker socket (`/var/run/docker.sock`). This gives the container **significant privileges** as it can:
 - Create and manage containers on the host
-- Access all Docker resources
+- Access all Docker services
 - Potentially escalate privileges
 
 **Only run this in trusted environments and ensure:**
 - The ColonyOS server is secured
-- Only trusted users can create ExecutorDeployment resources
+- Only trusted users can create ExecutorDeployment services
 - The network is properly isolated
 
 ## Quick Start
@@ -158,7 +158,7 @@ Final image size: ~40MB
 ### What Containers Are Created?
 
 When the controller reconciles an ExecutorDeployment:
-1. **Controller container** runs continuously, watching for resources
+1. **Controller container** runs continuously, watching for services
 2. **Managed containers** are created on the **host Docker daemon** (not inside the controller)
 
 Example:
@@ -260,7 +260,7 @@ COLONIES_SERVER_HOST=colonies-server  # Use container name
 **Check:**
 1. Container logs: `docker logs <container-name>`
 2. Reconciliation process logs in ColonyOS
-3. Resource constraints (CPU/memory)
+3. Service constraints (CPU/memory)
 
 ### Clean Up Orphaned Containers
 
@@ -305,12 +305,12 @@ services:
       - colonies-internal
 ```
 
-### 4. Resource Limits
+### 4. Service Limits
 ```yaml
 services:
   deployment-controller:
     deploy:
-      resources:
+      services:
         limits:
           cpus: '1.0'
           memory: 512M
@@ -345,9 +345,9 @@ services:
     cap_drop:
       - ALL
 
-    # Resources
+    # Services
     deploy:
-      resources:
+      services:
         limits:
           cpus: '1.0'
           memory: 512M
@@ -481,7 +481,7 @@ A: Managed containers keep running. On restart, the controller will reconcile th
 A: Not directly. It manages containers on the Docker daemon it's connected to (via socket).
 
 **Q: How do I update a deployment?**
-A: Update the ExecutorDeployment resource in ColonyOS. The controller will reconcile the changes.
+A: Update the ExecutorDeployment service in ColonyOS. The controller will reconcile the changes.
 
 **Q: Can I use Podman instead of Docker?**
 A: Potentially, if Podman's socket is Docker-compatible. This hasn't been tested.

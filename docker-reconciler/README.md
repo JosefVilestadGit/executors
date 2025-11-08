@@ -1,6 +1,6 @@
 # Deployment Controller Executor
 
-A ColonyOS executor that reconciles container deployments based on ExecutorDeployment resources. This executor acts as a Kubernetes-style controller that watches for resource changes and ensures containers are deployed and scaled according to the specified configuration.
+A ColonyOS executor that reconciles container deployments based on ExecutorDeployment services. This executor acts as a Kubernetes-style controller that watches for service changes and ensures containers are deployed and scaled according to the specified configuration.
 
 ## 🚀 Quick Start - Complete Copy-Paste Example
 
@@ -12,14 +12,14 @@ docker-compose up -d
 # 2. Wait for services to be ready (about 30 seconds)
 docker-compose logs -f deployment-controller
 
-# 3. Register the ExecutorDeployment resource definition (one-time setup)
+# 3. Register the ExecutorDeployment service definition (one-time setup)
 export COLONIES_SERVER_HOST=localhost
 export COLONIES_SERVER_PORT=50080
 export COLONIES_INSECURE=true
 export COLONIES_COLONY_NAME=dev
 export COLONIES_PRVKEY=<your-colony-private-key>
 
-colonies resource definition add --spec - <<EOF
+colonies service definition add --spec - <<EOF
 {
   "metadata": {
     "name": "executordeployments.compute.colonies.io"
@@ -65,7 +65,7 @@ colonies resource definition add --spec - <<EOF
 EOF
 
 # 4. Create your first deployment - nginx with 3 replicas
-colonies resource add --spec - <<EOF
+colonies service add --spec - <<EOF
 {
   "kind": "ExecutorDeployment",
   "metadata": {
@@ -93,7 +93,7 @@ docker ps --filter "label=colonies.deployment=nginx-deployment"
 # ghi789...      nginx:latest   "/docker-entrypoint.…"   Up 10 seconds  nginx-deployment-2
 
 # 6. Scale the deployment (change replicas to 5)
-colonies resource update --spec - <<EOF
+colonies service update --spec - <<EOF
 {
   "kind": "ExecutorDeployment",
   "metadata": {
@@ -115,7 +115,7 @@ docker ps --filter "label=colonies.deployment=nginx-deployment" | wc -l
 # Should show 6 (5 containers + 1 header line)
 
 # 8. Clean up - remove the deployment
-colonies resource remove --name nginx-deployment
+colonies service remove --name nginx-deployment
 
 # 9. Stop all managed containers
 docker rm -f $(docker ps -aq --filter "label=colonies.deployment=nginx-deployment")
@@ -123,7 +123,7 @@ docker rm -f $(docker ps -aq --filter "label=colonies.deployment=nginx-deploymen
 
 **What just happened?**
 1. ✅ Started deployment-controller with ColonyOS
-2. ✅ Registered the ExecutorDeployment resource type
+2. ✅ Registered the ExecutorDeployment service type
 3. ✅ Created an nginx deployment with 3 replicas
 4. ✅ Controller automatically started 3 nginx containers
 5. ✅ Scaled to 5 replicas - controller added 2 more containers
@@ -137,20 +137,20 @@ If you prefer using files instead of heredocs:
 # Navigate to deployment-controller directory
 cd executors/deployment-controller
 
-# Register the resource definition
-colonies resource definition add --spec examples/executor-deployment-definition.json
+# Register the service definition
+colonies service definition add --spec examples/executor-deployment-definition.json
 
 # Create a deployment
-colonies resource add --spec examples/nginx-deployment.json
+colonies service add --spec examples/nginx-deployment.json
 
 # Or use the instance example
-colonies resource add --spec examples/executor-deployment-instance.json
+colonies service add --spec examples/executor-deployment-instance.json
 ```
 
 ## Overview
 
 The Deployment Controller Executor:
-- Watches for `ExecutorDeployment` resources in ColonyOS
+- Watches for `ExecutorDeployment` services in ColonyOS
 - Reconciles the desired state (replicas, image, env vars) with the actual running containers
 - Manages container lifecycle (start, stop, scale up/down)
 - Uses Docker labels to track and manage deployed containers
@@ -163,7 +163,7 @@ The Deployment Controller Executor:
 │   ColonyOS Server   │
 │                     │
 │  ┌──────────────┐  │
-│  │  Resources   │  │
+│  │  Services   │  │
 │  │  (CRDs)      │  │
 │  └──────────────┘  │
 └──────────┬──────────┘
@@ -189,13 +189,13 @@ The Deployment Controller Executor:
 
 ## Features
 
-- **Declarative Management**: Define desired container state via ExecutorDeployment resources
+- **Declarative Management**: Define desired container state via ExecutorDeployment services
 - **Automatic Reconciliation**: Continuously ensures actual state matches desired state
 - **Scaling**: Automatically scales containers up or down based on replica count
 - **Label-based Tracking**: Uses Docker labels to identify and manage containers
 - **Environment Variables**: Supports passing environment variables to containers
 - **Port Configuration**: Configure exposed ports for containers
-- **Resource Specification**: Define CPU and memory requirements
+- **Service Specification**: Define CPU and memory requirements
 
 ## Building
 
@@ -263,18 +263,18 @@ export COLONIES_EXECUTOR_ID="your-executor-id"
 
 ### 1. Register the ResourceDefinition
 
-First, register the ExecutorDeployment resource definition (requires colony owner privileges):
+First, register the ExecutorDeployment service definition (requires colony owner privileges):
 
 ```bash
-colonies resource definition add --spec examples/resources/executor-deployment-definition.json
+colonies service definition add --spec examples/services/executor-deployment-definition.json
 ```
 
 ### 2. Create a Deployment
 
-Create an ExecutorDeployment resource:
+Create an ExecutorDeployment service:
 
 ```bash
-colonies resource add --spec examples/nginx-deployment.json
+colonies service add --spec examples/nginx-deployment.json
 ```
 
 Example deployment (`nginx-deployment.json`):
@@ -316,11 +316,11 @@ The deployment controller executor will:
 
 ### 4. Scale the Deployment
 
-Update the resource to change the replica count:
+Update the service to change the replica count:
 
 ```bash
 # Edit the JSON file to change replicas
-colonies resource update --spec examples/nginx-deployment.json
+colonies service update --spec examples/nginx-deployment.json
 ```
 
 The controller will automatically scale up or down to match the desired state.
@@ -338,7 +338,7 @@ docker ps --filter "label=colonies.deployment=nginx-deployment"
 ### Reconciliation Loop
 
 1. **Watch for Processes**: The executor watches for `reconcile` function calls
-2. **Fetch Resource**: Retrieves the ExecutorDeployment resource specification
+2. **Fetch Service**: Retrieves the ExecutorDeployment service specification
 3. **Compare State**: Lists running containers with the deployment label
 4. **Reconcile**:
    - If current < desired replicas: Start new containers
@@ -363,7 +363,7 @@ Each managed container has these labels:
 The executor automatically adds these environment variables to containers:
 - `COLONIES_DEPLOYMENT=<deployment-name>`
 - `COLONIES_CONTAINER_NAME=<container-name>`
-- Plus any user-specified env vars from the resource spec
+- Plus any user-specified env vars from the service spec
 
 ## Troubleshooting
 
@@ -378,11 +378,11 @@ The executor automatically adds these environment variables to containers:
 - Verify Docker is running and accessible
 - Check image name is correct and accessible
 - Review executor logs for detailed error messages
-- Ensure sufficient resources (CPU, memory) are available
+- Ensure sufficient services (CPU, memory) are available
 
 ### Scaling not working
 
-- Verify the resource was updated successfully
+- Verify the service was updated successfully
 - Check that a reconciliation process was triggered
 - Review process logs in ColonyOS
 
@@ -434,10 +434,10 @@ make push
 
 - [ ] Support for volume mounts
 - [ ] Health checks and automatic restart
-- [ ] Resource limits enforcement (CPU, memory)
+- [ ] Service limits enforcement (CPU, memory)
 - [ ] Network configuration
 - [ ] Support for multiple container runtimes (Podman, containerd)
-- [ ] Status reporting back to resource
+- [ ] Status reporting back to service
 - [ ] Event streaming
 - [ ] Deployment strategies (rolling updates, blue-green)
 
