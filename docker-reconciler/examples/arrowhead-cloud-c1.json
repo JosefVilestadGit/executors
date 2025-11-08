@@ -1,0 +1,52 @@
+{
+  "metadata": {
+    "name": "c1-cloud",
+    "labels": {
+      "environment": "development",
+      "cloud": "c1"
+    }
+  },
+  "kind": "ArrowheadCloud",
+  "spec": {
+    "cloudName": "c1",
+    "password": "your-certificate-password",
+    "database": {
+      "image": "aitiaiiot/arrowhead-database:4.6.1",
+      "port": 3306,
+      "volumePath": "/var/lib/arrowhead/c1-database"
+    },
+    "systems": {
+      "image": "aitiaiiot/arrowhead-system:4.6.1",
+      "configPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker",
+      "serviceRegistry": {
+        "port": 8443,
+        "enabled": true
+      },
+      "authorization": {
+        "port": 8445,
+        "enabled": true
+      },
+      "orchestrator": {
+        "port": 8441,
+        "enabled": true
+      },
+      "eventhandler": {
+        "port": 8455,
+        "enabled": true
+      },
+      "gatekeeper": {
+        "port": 8449,
+        "enabled": true
+      },
+      "gateway": {
+        "port": 8453,
+        "tunnelPortStart": 8001,
+        "tunnelPortEnd": 8100,
+        "enabled": true
+      }
+    },
+    "network": {
+      "networkName": "arrowhead-c1"
+    }
+  }
+}

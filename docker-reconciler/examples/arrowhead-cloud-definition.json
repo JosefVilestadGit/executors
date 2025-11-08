@@ -1,0 +1,114 @@
+{
+  "metadata": {
+    "name": "arrowhead-cloud"
+  },
+  "spec": {
+    "group": "arrowhead.eclipse.org",
+    "version": "v1",
+    "names": {
+      "kind": "ArrowheadCloud",
+      "plural": "arrowheadclouds",
+      "singular": "arrowheadcloud"
+    },
+    "scope": "Namespaced",
+    "schema": {
+      "type": "object",
+      "required": ["cloudName", "password", "database", "systems"],
+      "properties": {
+        "cloudName": {
+          "type": "string",
+          "description": "Name/prefix for this Arrowhead cloud (e.g., 'c1')"
+        },
+        "password": {
+          "type": "string",
+          "description": "Password for all certificates"
+        },
+        "database": {
+          "type": "object",
+          "required": ["image", "port"],
+          "properties": {
+            "image": {
+              "type": "string",
+              "description": "Docker image for database"
+            },
+            "port": {
+              "type": "integer",
+              "description": "External port to expose database on"
+            },
+            "volumePath": {
+              "type": "string",
+              "description": "Path on host for database volume"
+            }
+          }
+        },
+        "systems": {
+          "type": "object",
+          "required": ["image", "configPath"],
+          "properties": {
+            "image": {
+              "type": "string",
+              "description": "Docker image for Arrowhead core systems"
+            },
+            "configPath": {
+              "type": "string",
+              "description": "Base path to config and certificate directories"
+            },
+            "serviceRegistry": {
+              "type": "object",
+              "properties": {
+                "port": {"type": "integer"},
+                "enabled": {"type": "boolean", "default": true}
+              }
+            },
+            "authorization": {
+              "type": "object",
+              "properties": {
+                "port": {"type": "integer"},
+                "enabled": {"type": "boolean", "default": true}
+              }
+            },
+            "orchestrator": {
+              "type": "object",
+              "properties": {
+                "port": {"type": "integer"},
+                "enabled": {"type": "boolean", "default": true}
+              }
+            },
+            "eventhandler": {
+              "type": "object",
+              "properties": {
+                "port": {"type": "integer"},
+                "enabled": {"type": "boolean", "default": true}
+              }
+            },
+            "gatekeeper": {
+              "type": "object",
+              "properties": {
+                "port": {"type": "integer"},
+                "enabled": {"type": "boolean", "default": true}
+              }
+            },
+            "gateway": {
+              "type": "object",
+              "properties": {
+                "port": {"type": "integer"},
+                "tunnelPortStart": {"type": "integer"},
+                "tunnelPortEnd": {"type": "integer"},
+                "enabled": {"type": "boolean", "default": true}
+              }
+            }
+          }
+        },
+        "network": {
+          "type": "object",
+          "properties": {
+            "networkName": {
+              "type": "string",
+              "description": "Docker network name for inter-container communication"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,304 @@
+{
+  "metadata": {
+    "name": "c1-cloud",
+    "labels": {
+      "environment": "development",
+      "cloud": "c1",
+      "type": "arrowhead"
+    }
+  },
+  "kind": "DockerDeployment",
+  "spec": {
+    "network": {
+      "name": "arrowhead-c1",
+      "create": true
+    },
+    "instances": [
+      {
+        "name": "c1-database",
+        "type": "container",
+        "image": "aitiaiiot/arrowhead-database:4.6.1",
+        "ports": [
+          {
+            "container": 3306,
+            "host": 3306
+          }
+        ],
+        "volumes": [
+          {
+            "type": "named",
+            "name": "c1-database",
+            "mountPath": "/var/lib/mysql"
+          }
+        ],
+        "restartPolicy": "unless-stopped",
+        "healthcheck": {
+          "test": "mysqladmin ping -h localhost",
+          "interval": "10s",
+          "timeout": "5s",
+          "retries": 5
+        }
+      },
+      {
+        "name": "c1-serviceregistry",
+        "type": "container",
+        "image": "aitiaiiot/arrowhead-system:4.6.1",
+        "environment": {
+          "SYSTEM_NAME": "serviceregistry",
+          "TZ": "Europe/Amsterdam"
+        },
+        "envFile": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/.env",
+        "dependsOn": ["c1-database"],
+        "volumes": [
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1-props/serviceregistry/application.properties",
+            "mountPath": "/opt/arrowhead/application.properties"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1/serviceregistry/certificates",
+            "mountPath": "/opt/arrowhead/certificates"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/serviceregistry/log4j2.xml",
+            "mountPath": "/opt/arrowhead/log4j2.xml"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/serviceregistry/run.sh",
+            "mountPath": "/opt/arrowhead/run.sh"
+          }
+        ],
+        "ports": [
+          {
+            "container": 8443,
+            "host": 8443
+          }
+        ],
+        "restartPolicy": "unless-stopped"
+      },
+      {
+        "name": "c1-authorization",
+        "type": "container",
+        "image": "aitiaiiot/arrowhead-system:4.6.1",
+        "environment": {
+          "SYSTEM_NAME": "authorization",
+          "TZ": "Europe/Amsterdam"
+        },
+        "envFile": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/.env",
+        "dependsOn": ["c1-database"],
+        "volumes": [
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1-props/authorization/application.properties",
+            "mountPath": "/opt/arrowhead/application.properties"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1/authorization/certificates",
+            "mountPath": "/opt/arrowhead/certificates"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/authorization/log4j2.xml",
+            "mountPath": "/opt/arrowhead/log4j2.xml"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/authorization/run.sh",
+            "mountPath": "/opt/arrowhead/run.sh"
+          }
+        ],
+        "ports": [
+          {
+            "container": 8445,
+            "host": 8445
+          }
+        ],
+        "restartPolicy": "unless-stopped"
+      },
+      {
+        "name": "c1-orchestrator",
+        "type": "container",
+        "image": "aitiaiiot/arrowhead-system:4.6.1",
+        "environment": {
+          "SYSTEM_NAME": "orchestrator",
+          "TZ": "Europe/Amsterdam"
+        },
+        "envFile": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/.env",
+        "dependsOn": ["c1-database"],
+        "volumes": [
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1-props/orchestrator/application.properties",
+            "mountPath": "/opt/arrowhead/application.properties"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1/orchestrator/certificates",
+            "mountPath": "/opt/arrowhead/certificates"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/orchestrator/log4j2.xml",
+            "mountPath": "/opt/arrowhead/log4j2.xml"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/orchestrator/run.sh",
+            "mountPath": "/opt/arrowhead/run.sh"
+          }
+        ],
+        "ports": [
+          {
+            "container": 8441,
+            "host": 8441
+          }
+        ],
+        "restartPolicy": "unless-stopped"
+      },
+      {
+        "name": "c1-eventhandler",
+        "type": "container",
+        "image": "aitiaiiot/arrowhead-system:4.6.1",
+        "environment": {
+          "SYSTEM_NAME": "eventhandler",
+          "TZ": "Europe/Amsterdam"
+        },
+        "envFile": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/.env",
+        "dependsOn": ["c1-database"],
+        "volumes": [
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1-props/eventhandler/application.properties",
+            "mountPath": "/opt/arrowhead/application.properties"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1/eventhandler/certificates",
+            "mountPath": "/opt/arrowhead/certificates"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/eventhandler/log4j2.xml",
+            "mountPath": "/opt/arrowhead/log4j2.xml"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/eventhandler/run.sh",
+            "mountPath": "/opt/arrowhead/run.sh"
+          }
+        ],
+        "ports": [
+          {
+            "container": 8455,
+            "host": 8455
+          }
+        ],
+        "restartPolicy": "unless-stopped"
+      },
+      {
+        "name": "c1-gatekeeper",
+        "type": "container",
+        "image": "aitiaiiot/arrowhead-system:4.6.1",
+        "environment": {
+          "SYSTEM_NAME": "gatekeeper",
+          "TZ": "Europe/Amsterdam"
+        },
+        "envFile": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/.env",
+        "dependsOn": ["c1-database"],
+        "volumes": [
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1-props/gatekeeper/application.properties",
+            "mountPath": "/opt/arrowhead/application.properties"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1/gatekeeper/certificates",
+            "mountPath": "/opt/arrowhead/certificates"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/gatekeeper/log4j2.xml",
+            "mountPath": "/opt/arrowhead/log4j2.xml"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/gatekeeper/run.sh",
+            "mountPath": "/opt/arrowhead/run.sh"
+          }
+        ],
+        "ports": [
+          {
+            "container": 8449,
+            "host": 8449
+          }
+        ],
+        "restartPolicy": "unless-stopped"
+      },
+      {
+        "name": "c1-gateway",
+        "type": "container",
+        "image": "aitiaiiot/arrowhead-system:4.6.1",
+        "environment": {
+          "SYSTEM_NAME": "gateway",
+          "TZ": "Europe/Amsterdam"
+        },
+        "envFile": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/.env",
+        "dependsOn": ["c1-database"],
+        "volumes": [
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1-props/gateway/application.properties",
+            "mountPath": "/opt/arrowhead/application.properties"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1/gateway/certificates",
+            "mountPath": "/opt/arrowhead/certificates"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/gateway/log4j2.xml",
+            "mountPath": "/opt/arrowhead/log4j2.xml"
+          },
+          {
+            "type": "bind",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/gateway/run.sh",
+            "mountPath": "/opt/arrowhead/run.sh"
+          }
+        ],
+        "ports": [
+          {
+            "container": 8453,
+            "host": 8453
+          },
+          {
+            "container": 8001,
+            "host": 8001
+          },
+          {
+            "container": 8002,
+            "host": 8002
+          },
+          {
+            "container": 8003,
+            "host": 8003
+          },
+          {
+            "container": 8004,
+            "host": 8004
+          },
+          {
+            "container": 8005,
+            "host": 8005
+          }
+        ],
+        "restartPolicy": "unless-stopped"
+      }
+    ]
+  }
+}

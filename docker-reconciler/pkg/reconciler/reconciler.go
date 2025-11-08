@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/colonyos/colonies/pkg/client"
@@ -15,6 +16,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
 	dockerclient "github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -44,6 +46,66 @@ type VolumeSpec struct {
 	Host      string `json:"host"`
 	Container string `json:"container"`
 	ReadOnly  bool   `json:"readOnly"`
+}
+
+// DockerDeployment types
+type DockerDeploymentSpec struct {
+	Instances []ContainerInstance    `json:"instances"`
+	Network   *NetworkSpec           `json:"network,omitempty"`
+}
+
+type ContainerInstance struct {
+	Name          string                 `json:"name"`
+	Type          string                 `json:"type"`
+	Image         string                 `json:"image"`
+	Command       []string               `json:"command,omitempty"`
+	Args          []string               `json:"args,omitempty"`
+	Environment   map[string]string      `json:"environment,omitempty"`
+	EnvFile       string                 `json:"envFile,omitempty"`
+	Ports         []DockerPortSpec       `json:"ports,omitempty"`
+	Volumes       []DockerVolumeSpec     `json:"volumes,omitempty"`
+	DependsOn     []string               `json:"dependsOn,omitempty"`
+	RestartPolicy string                 `json:"restartPolicy,omitempty"`
+	Healthcheck   *HealthcheckSpec       `json:"healthcheck,omitempty"`
+	Resources     *ResourcesSpec         `json:"resources,omitempty"`
+	Labels        map[string]string      `json:"labels,omitempty"`
+	Privileged    bool                   `json:"privileged"`
+	User          string                 `json:"user,omitempty"`
+	WorkingDir    string                 `json:"workingDir,omitempty"`
+	Hostname      string                 `json:"hostname,omitempty"`
+}
+
+type DockerPortSpec struct {
+	Container int    `json:"container"`
+	Host      int    `json:"host,omitempty"`
+	Protocol  string `json:"protocol,omitempty"`
+}
+
+type DockerVolumeSpec struct {
+	Type      string `json:"type"`          // bind, named, tmpfs
+	HostPath  string `json:"hostPath,omitempty"`
+	Name      string `json:"name,omitempty"`
+	MountPath string `json:"mountPath"`
+	ReadOnly  bool   `json:"readOnly"`
+}
+
+type NetworkSpec struct {
+	Name   string `json:"name"`
+	Create bool   `json:"create"`
+	Driver string `json:"driver,omitempty"`
+}
+
+type HealthcheckSpec struct {
+	Test        string `json:"test"`
+	Interval    string `json:"interval"`
+	Timeout     string `json:"timeout"`
+	Retries     int    `json:"retries"`
+	StartPeriod string `json:"startPeriod"`
+}
+
+type ResourcesSpec struct {
+	CPUs   string `json:"cpus"`
+	Memory string `json:"memory"`
 }
 
 type Reconciler struct {
@@ -126,13 +188,26 @@ func (r *Reconciler) generateUniqueExecutorName(colonyName, baseExecutorName str
 	return "", fmt.Errorf("failed to generate unique executor name after %d retries", maxRetries)
 }
 
-// Reconcile processes an ExecutorDeployment service and ensures the desired state
+// Reconcile processes a service and ensures the desired state
 func (r *Reconciler) Reconcile(process *core.Process, service *core.Service) error {
 	log.WithFields(log.Fields{
 		"ResourceName": service.Metadata.Name,
 		"ResourceKind": service.Kind,
 	}).Info("Starting reconciliation")
 
+	// Branch based on service kind
+	switch service.Kind {
+	case "ExecutorDeployment":
+		return r.reconcileExecutorDeployment(process, service)
+	case "DockerDeployment":
+		return r.reconcileDockerDeployment(process, service)
+	default:
+		return fmt.Errorf("unsupported service kind: %s", service.Kind)
+	}
+}
+
+// reconcileExecutorDeployment handles ExecutorDeployment services
+func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, service *core.Service) error {
 	// Parse the deployment spec
 	var spec DeploymentSpec
 	specBytes, err := json.Marshal(service.Spec)
@@ -173,6 +248,49 @@ func (r *Reconciler) Reconcile(process *core.Process, service *core.Service) err
 		existingContainers = []string{} // Continue with empty list
 	}
 
+	// Check for dirty containers (generation mismatch) and recreate them
+	dirtyContainers, err := r.findDirtyContainers(existingContainers, service.Metadata.Generation)
+	if err != nil {
+		r.addLog(process, fmt.Sprintf("Warning: Failed to check for dirty containers: %v", err))
+	} else if len(dirtyContainers) > 0 {
+		r.addLog(process, fmt.Sprintf("Found %d dirty container(s) with outdated generation, recreating...", len(dirtyContainers)))
+
+		for _, containerID := range dirtyContainers {
+			// Get container name before removing
+			inspect, err := r.dockerClient.ContainerInspect(context.Background(), containerID)
+			if err != nil {
+				r.addLog(process, fmt.Sprintf("Warning: Failed to inspect dirty container %s: %v", containerID, err))
+				continue
+			}
+
+			containerName := inspect.Name
+			if len(containerName) > 0 && containerName[0] == '/' {
+				containerName = containerName[1:]
+			}
+
+			// Stop and remove the dirty container
+			r.addLog(process, fmt.Sprintf("Removing dirty container: %s (generation mismatch)", containerName))
+			if err := r.stopAndRemoveContainer(containerID); err != nil {
+				r.addLog(process, fmt.Sprintf("Warning: Failed to remove dirty container %s: %v", containerID, err))
+				continue
+			}
+
+			// Recreate the container with new spec and generation
+			if err := r.startContainer(process, spec, containerName, service); err != nil {
+				r.addLog(process, fmt.Sprintf("Error recreating container %s: %v", containerName, err))
+				return fmt.Errorf("failed to recreate container %s: %w", containerName, err)
+			}
+			r.addLog(process, fmt.Sprintf("Recreated container: %s with generation %d", containerName, service.Metadata.Generation))
+		}
+
+		// Refresh the container list after recreating dirty ones
+		existingContainers, err = r.listContainersByLabel(service.Metadata.Name)
+		if err != nil {
+			r.addLog(process, fmt.Sprintf("Warning: Failed to refresh container list: %v", err))
+			existingContainers = []string{}
+		}
+	}
+
 	currentReplicas := len(existingContainers)
 	r.addLog(process, fmt.Sprintf("Current replicas: %d, Desired replicas: %d", currentReplicas, spec.Replicas))
 
@@ -197,7 +315,7 @@ func (r *Reconciler) Reconcile(process *core.Process, service *core.Service) err
 				containerName = fmt.Sprintf("%s-%d", service.Metadata.Name, currentReplicas+i)
 			}
 
-			if err := r.startContainer(process, spec, containerName, service.Metadata.Name, service.Metadata.Namespace); err != nil {
+			if err := r.startContainer(process, spec, containerName, service); err != nil {
 				r.addLog(process, fmt.Sprintf("Error starting container %s: %v", containerName, err))
 				return fmt.Errorf("failed to start container %s: %w", containerName, err)
 			}
@@ -221,6 +339,132 @@ func (r *Reconciler) Reconcile(process *core.Process, service *core.Service) err
 	}
 
 	r.addLog(process, "Reconciliation completed successfully")
+	return nil
+}
+
+// reconcileDockerDeployment handles DockerDeployment services
+func (r *Reconciler) reconcileDockerDeployment(process *core.Process, service *core.Service) error {
+	// Parse the docker deployment spec
+	var spec DockerDeploymentSpec
+	specBytes, err := json.Marshal(service.Spec)
+	if err != nil {
+		return fmt.Errorf("failed to marshal spec: %w", err)
+	}
+
+	if err := json.Unmarshal(specBytes, &spec); err != nil {
+		return fmt.Errorf("failed to unmarshal docker deployment spec: %w", err)
+	}
+
+	// Validate required fields
+	if len(spec.Instances) == 0 {
+		return fmt.Errorf("at least one instance is required")
+	}
+
+	r.addLog(process, fmt.Sprintf("Reconciling DockerDeployment: %s with %d instance(s)", service.Metadata.Name, len(spec.Instances)))
+
+	// Get currently running containers for this deployment
+	existingContainers, err := r.listContainersByLabel(service.Metadata.Name)
+	if err != nil {
+		r.addLog(process, fmt.Sprintf("Warning: Failed to list existing containers: %v", err))
+		existingContainers = []string{} // Continue with empty list
+	}
+
+	// Build a map of existing containers by name
+	existingContainersByName := make(map[string]string) // name -> containerID
+	for _, containerID := range existingContainers {
+		inspect, err := r.dockerClient.ContainerInspect(context.Background(), containerID)
+		if err != nil {
+			r.addLog(process, fmt.Sprintf("Warning: Failed to inspect container %s: %v", containerID, err))
+			continue
+		}
+
+		containerName := inspect.Name
+		if len(containerName) > 0 && containerName[0] == '/' {
+			containerName = containerName[1:]
+		}
+		existingContainersByName[containerName] = containerID
+	}
+
+	// Process each instance
+	for _, instance := range spec.Instances {
+		// Validate instance
+		if instance.Name == "" {
+			return fmt.Errorf("instance name is required")
+		}
+		if instance.Image == "" {
+			return fmt.Errorf("instance image is required for %s", instance.Name)
+		}
+
+		r.addLog(process, fmt.Sprintf("Processing instance: %s (image: %s)", instance.Name, instance.Image))
+
+		// Pull the image
+		if err := r.pullImage(process, instance.Image); err != nil {
+			return fmt.Errorf("failed to pull image for instance %s: %w", instance.Name, err)
+		}
+
+		// Check if container already exists
+		existingContainerID, exists := existingContainersByName[instance.Name]
+
+		if exists {
+			// Check if container is dirty (generation mismatch)
+			inspect, err := r.dockerClient.ContainerInspect(context.Background(), existingContainerID)
+			if err != nil {
+				r.addLog(process, fmt.Sprintf("Warning: Failed to inspect container %s: %v", instance.Name, err))
+			} else {
+				// Check generation
+				generationStr, hasLabel := inspect.Config.Labels["colonies.generation"]
+				isDirty := false
+
+				if !hasLabel {
+					isDirty = true
+					r.addLog(process, fmt.Sprintf("Container %s has no generation label, recreating", instance.Name))
+				} else {
+					var containerGeneration int64
+					if _, err := fmt.Sscanf(generationStr, "%d", &containerGeneration); err != nil {
+						isDirty = true
+						r.addLog(process, fmt.Sprintf("Container %s has invalid generation label, recreating", instance.Name))
+					} else if containerGeneration < service.Metadata.Generation {
+						isDirty = true
+						r.addLog(process, fmt.Sprintf("Container %s has outdated generation (%d < %d), recreating",
+							instance.Name, containerGeneration, service.Metadata.Generation))
+					}
+				}
+
+				if isDirty {
+					// Remove dirty container
+					if err := r.stopAndRemoveContainer(existingContainerID); err != nil {
+						return fmt.Errorf("failed to remove dirty container %s: %w", instance.Name, err)
+					}
+					// Create new container
+					if err := r.startDockerDeploymentInstance(process, instance, service); err != nil {
+						return fmt.Errorf("failed to start instance %s: %w", instance.Name, err)
+					}
+					r.addLog(process, fmt.Sprintf("Recreated container: %s with generation %d", instance.Name, service.Metadata.Generation))
+				} else {
+					r.addLog(process, fmt.Sprintf("Container %s is up to date", instance.Name))
+				}
+			}
+		} else {
+			// Container doesn't exist, create it
+			if err := r.startDockerDeploymentInstance(process, instance, service); err != nil {
+				return fmt.Errorf("failed to start instance %s: %w", instance.Name, err)
+			}
+			r.addLog(process, fmt.Sprintf("Created container: %s", instance.Name))
+		}
+
+		// Remove from map so we can track which containers to remove
+		delete(existingContainersByName, instance.Name)
+	}
+
+	// Remove any containers that are no longer in the spec
+	for containerName, containerID := range existingContainersByName {
+		r.addLog(process, fmt.Sprintf("Removing obsolete container: %s", containerName))
+		if err := r.stopAndRemoveContainer(containerID); err != nil {
+			r.addLog(process, fmt.Sprintf("Warning: Failed to remove container %s: %v", containerName, err))
+		}
+	}
+
+	r.addLog(process, "Docker deployment reconciliation completed successfully")
 	return nil
 }
 
@@ -305,7 +549,7 @@ func (r *Reconciler) pullImage(process *core.Process, image string) error {
 	}
 }
 
-func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, containerName string, deploymentName string, colonyName string) error {
+func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, containerName string, service *core.Service) error {
 	ctx := context.Background()
 
 	// Check if a container with this name already exists (running or stopped)
@@ -343,7 +587,7 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 	for k, v := range spec.Env {
 		envVars = append(envVars, fmt.Sprintf("%s=%v", k, v))
 	}
-	envVars = append(envVars, "COLONIES_DEPLOYMENT="+deploymentName)
+	envVars = append(envVars, "COLONIES_DEPLOYMENT="+service.Metadata.Name)
 	envVars = append(envVars, "COLONIES_CONTAINER_NAME="+containerName)
 
 	// If this is a colony executor deployment, use the container name as executor name
@@ -363,8 +607,9 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 		Image: spec.Image,
 		Env:   envVars,
 		Labels: map[string]string{
-			"colonies.deployment": deploymentName,
+			"colonies.deployment": service.Metadata.Name,
 			"colonies.managed":    "true",
+			"colonies.generation": fmt.Sprintf("%d", service.Metadata.Generation),
 		},
 	}
 
@@ -398,10 +643,46 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 		hostConfig.Binds = binds
 	}
 
+	// Add port bindings
+	if len(spec.Ports) > 0 {
+		portBindings := nat.PortMap{}
+		exposedPorts := nat.PortSet{}
+
+		for _, port := range spec.Ports {
+			protocol := port.Protocol
+			if protocol == "" {
+				protocol = "TCP"
+			}
+
+			containerPort, err := nat.NewPort(strings.ToLower(protocol), fmt.Sprintf("%d", port.Port))
+			if err != nil {
+				log.WithFields(log.Fields{"Error": err, "Port": port.Port}).Warn("Failed to create port binding")
+				continue
+			}
+
+			hostPort := fmt.Sprintf("%d", port.Port)
+
+			portBindings[containerPort] = []nat.PortBinding{
+				{
+					HostIP:   "0.0.0.0",
+					HostPort: hostPort,
+				},
+			}
+			exposedPorts[containerPort] = struct{}{}
+		}
+
+		hostConfig.PortBindings = portBindings
+		config.ExposedPorts = exposedPorts
+	}
+
 	// Create network config to attach to colonies network
+	// Add network alias using the deployment name so containers can reach each other
+	// by service name (e.g., c1-database) instead of random container name (c1-database-e9328)
 	networkConfig := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{
-			"colonies_default": {},
+			"colonies_default": {
+				Aliases: []string{service.Metadata.Name},
+			},
 		},
 	}
 
@@ -421,6 +702,153 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 		"ContainerName": containerName,
 		"Image":         spec.Image,
 	}).Info("Container started")
+
+	return nil
+}
+
+// startDockerDeploymentInstance creates and starts a container from a ContainerInstance spec
+func (r *Reconciler) startDockerDeploymentInstance(process *core.Process, instance ContainerInstance, service *core.Service) error {
+	ctx := context.Background()
+	containerName := instance.Name
+
+	// Convert environment map to string slice
+	envVars := []string{}
+	for k, v := range instance.Environment {
+		envVars = append(envVars, fmt.Sprintf("%s=%s", k, v))
+	}
+	envVars = append(envVars, "COLONIES_DEPLOYMENT="+service.Metadata.Name)
+	envVars = append(envVars, "COLONIES_CONTAINER_NAME="+containerName)
+
+	// Create container config
+	config := &container.Config{
+		Image: instance.Image,
+		Env:   envVars,
+		Labels: map[string]string{
+			"colonies.deployment": service.Metadata.Name,
+			"colonies.managed":    "true",
+			"colonies.generation": fmt.Sprintf("%d", service.Metadata.Generation),
+		},
+	}
+
+	// Add custom labels if provided
+	if instance.Labels != nil {
+		for k, v := range instance.Labels {
+			config.Labels[k] = v
+		}
+	}
+
+	// Override command if specified
+	if len(instance.Command) > 0 {
+		config.Cmd = instance.Command
+	}
+
+	// Override args if specified (append to Cmd)
+	if len(instance.Args) > 0 {
+		config.Cmd = append(config.Cmd, instance.Args...)
+	}
+
+	// Set working directory
+	if instance.WorkingDir != "" {
+		config.WorkingDir = instance.WorkingDir
+	}
+
+	// Set user
+	if instance.User != "" {
+		config.User = instance.User
+	}
+
+	// Set hostname
+	if instance.Hostname != "" {
+		config.Hostname = instance.Hostname
+	}
+
+	// Configure ports
+	exposedPorts := nat.PortSet{}
+	portBindings := nat.PortMap{}
+	for _, port := range instance.Ports {
+		protocol := "tcp"
+		if port.Protocol != "" {
+			protocol = port.Protocol
+		}
+
+		natPort := nat.Port(fmt.Sprintf("%d/%s", port.Container, protocol))
+		exposedPorts[natPort] = struct{}{}
+
+		if port.Host > 0 {
+			portBindings[natPort] = []nat.PortBinding{
+				{
+					HostIP:   "0.0.0.0",
+					HostPort: fmt.Sprintf("%d", port.Host),
+				},
+			}
+		}
+	}
+	config.ExposedPorts = exposedPorts
+
+	// Create host config
+	hostConfig := &container.HostConfig{
+		PortBindings: portBindings,
+		Privileged:   instance.Privileged,
+	}
+
+	// Set restart policy if specified
+	if instance.RestartPolicy != "" {
+		hostConfig.RestartPolicy = container.RestartPolicy{
+			Name: container.RestartPolicyMode(instance.RestartPolicy),
+		}
+	}
+
+	// Configure volumes
+	binds := []string{}
+	for _, vol := range instance.Volumes {
+		switch vol.Type {
+		case "bind":
+			bind := fmt.Sprintf("%s:%s", vol.HostPath, vol.MountPath)
+			if vol.ReadOnly {
+				bind += ":ro"
+			}
+			binds = append(binds, bind)
+		case "named":
+			bind := fmt.Sprintf("%s:%s", vol.Name, vol.MountPath)
+			if vol.ReadOnly {
+				bind += ":ro"
+			}
+			binds = append(binds, bind)
+		}
+	}
+	hostConfig.Binds = binds
+
+	// Set resource limits if specified
+	if instance.Resources != nil {
+		// CPU limits would go here (not implemented in this version)
+		// Memory limits would go here (not implemented in this version)
+	}
+
+	// Network configuration - use service name as network alias
+	networkConfig := &network.NetworkingConfig{
+		EndpointsConfig: map[string]*network.EndpointSettings{
+			"colonies_default": {
+				Aliases: []string{service.Metadata.Name, containerName},
+			},
+		},
+	}
+
+	// Create the container
+	resp, err := r.dockerClient.ContainerCreate(ctx, config, hostConfig, networkConfig, nil, containerName)
+	if err != nil {
+		return fmt.Errorf("failed to create container: %w", err)
+	}
+
+	// Start the container
+	if err := r.dockerClient.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		return fmt.Errorf("failed to start container: %w", err)
+	}
+
+	log.WithFields(log.Fields{
+		"ContainerID":   resp.ID,
+		"ContainerName": containerName,
+		"Image":         instance.Image,
+	}).Info("Docker deployment instance started")
 
 	return nil
 }
@@ -455,6 +883,63 @@ func (r *Reconciler) stopContainer(containerID string) error {
 	return r.dockerClient.ContainerStop(ctx, containerID, container.StopOptions{
 		Timeout: &timeout,
 	})
+}
+
+func (r *Reconciler) stopAndRemoveContainer(containerID string) error {
+	ctx := context.Background()
+
+	// Stop the container first
+	timeout := 10
+	if err := r.dockerClient.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout}); err != nil {
+		log.WithFields(log.Fields{"Error": err, "ContainerID": containerID}).Warn("Failed to stop container before removal")
+	}
+
+	// Remove the container
+	return r.dockerClient.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
+}
+
+// findDirtyContainers checks which containers have an outdated generation
+func (r *Reconciler) findDirtyContainers(containerIDs []string, currentGeneration int64) ([]string, error) {
+	ctx := context.Background()
+	dirtyContainers := []string{}
+
+	for _, containerID := range containerIDs {
+		inspect, err := r.dockerClient.ContainerInspect(ctx, containerID)
+		if err != nil {
+			log.WithFields(log.Fields{"Error": err, "ContainerID": containerID}).Warn("Failed to inspect container for generation check")
+			continue
+		}
+
+		// Check if container has generation label
+		generationStr, hasLabel := inspect.Config.Labels["colonies.generation"]
+		if !hasLabel {
+			// Old container without generation label - mark as dirty
+			log.WithFields(log.Fields{"ContainerID": containerID}).Info("Container missing generation label, marking as dirty")
+			dirtyContainers = append(dirtyContainers, containerID)
+			continue
+		}
+
+		// Parse generation from label
+		var containerGeneration int64
+		if _, err := fmt.Sscanf(generationStr, "%d", &containerGeneration); err != nil {
+			log.WithFields(log.Fields{"Error": err, "ContainerID": containerID, "GenerationLabel": generationStr}).Warn("Failed to parse generation label")
+			// Mark as dirty if we can't parse
+			dirtyContainers = append(dirtyContainers, containerID)
+			continue
+		}
+
+		// Check if container generation is outdated
+		if containerGeneration < currentGeneration {
+			log.WithFields(log.Fields{
+				"ContainerID":          containerID,
+				"ContainerGeneration":  containerGeneration,
+				"CurrentGeneration":    currentGeneration,
+			}).Info("Container has outdated generation, marking as dirty")
+			dirtyContainers = append(dirtyContainers, containerID)
+		}
+	}
+
+	return dirtyContainers, nil
 }
 
 func (r *Reconciler) addLog(process *core.Process, message string) {
