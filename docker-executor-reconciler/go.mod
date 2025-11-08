@@ -1,4 +1,4 @@
-module github.com/colonyos/executors/deployment-controller
+module github.com/colonyos/executors/docker-executor-reconciler
 
 go 1.25
 

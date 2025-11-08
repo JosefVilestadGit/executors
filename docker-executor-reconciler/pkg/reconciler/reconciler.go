@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/colonyos/colonies/pkg/client"
 	"github.com/colonyos/colonies/pkg/core"
@@ -182,7 +183,20 @@ func (r *Reconciler) Reconcile(process *core.Process, resource *core.Resource) e
 		r.addLog(process, fmt.Sprintf("Scaling up: starting %d new container(s)", containersToStart))
 
 		for i := 0; i < containersToStart; i++ {
-			containerName := fmt.Sprintf("%s-%d", resource.Metadata.Name, currentReplicas+i)
+			// Generate unique executor name that will be used as both container name and executor name
+			var containerName string
+			if spec.ExecutorName != "" {
+				uniqueExecutorName, err := r.generateUniqueExecutorName(resource.Metadata.Namespace, spec.ExecutorName)
+				if err != nil {
+					r.addLog(process, fmt.Sprintf("Error generating unique executor name: %v", err))
+					return fmt.Errorf("failed to generate unique executor name: %w", err)
+				}
+				containerName = uniqueExecutorName
+			} else {
+				// For non-executor deployments, use index-based naming
+				containerName = fmt.Sprintf("%s-%d", resource.Metadata.Name, currentReplicas+i)
+			}
+
 			if err := r.startContainer(process, spec, containerName, resource.Metadata.Name, resource.Metadata.Namespace); err != nil {
 				r.addLog(process, fmt.Sprintf("Error starting container %s: %v", containerName, err))
 				return fmt.Errorf("failed to start container %s: %w", containerName, err)
@@ -208,6 +222,58 @@ func (r *Reconciler) Reconcile(process *core.Process, resource *core.Resource) e
 
 	r.addLog(process, "Reconciliation completed successfully")
 	return nil
+}
+
+// CollectStatus gathers current status of containers for a resource
+func (r *Reconciler) CollectStatus(resource *core.Resource) (map[string]interface{}, error) {
+	// Get list of containers for this deployment
+	containerIDs, err := r.listContainersByLabel(resource.Metadata.Name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	containers := make([]map[string]interface{}, 0)
+	running := 0
+	stopped := 0
+
+	for _, containerID := range containerIDs {
+		inspect, err := r.dockerClient.ContainerInspect(context.Background(), containerID)
+		if err != nil {
+			log.WithError(err).WithField("containerID", containerID).Warn("Failed to inspect container")
+			continue
+		}
+
+		state := "stopped"
+		if inspect.State.Running {
+			state = "running"
+			running++
+		} else {
+			stopped++
+		}
+
+		// Extract container name (remove leading "/")
+		containerName := inspect.Name
+		if len(containerName) > 0 && containerName[0] == '/' {
+			containerName = containerName[1:]
+		}
+
+		containers = append(containers, map[string]interface{}{
+			"id":         inspect.ID[:12], // Short ID
+			"name":       containerName,
+			"state":      state,
+			"created":    inspect.Created,
+			"image":      inspect.Config.Image,
+			"lastCheck":  time.Now().Format(time.RFC3339),
+		})
+	}
+
+	return map[string]interface{}{
+		"containers":      containers,
+		"runningReplicas": running,
+		"stoppedReplicas": stopped,
+		"totalReplicas":   len(containers),
+		"lastUpdated":     time.Now().Format(time.RFC3339),
+	}, nil
 }
 
 func (r *Reconciler) pullImage(process *core.Process, image string) error {
@@ -279,19 +345,16 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 	envVars = append(envVars, "COLONIES_DEPLOYMENT="+deploymentName)
 	envVars = append(envVars, "COLONIES_CONTAINER_NAME="+containerName)
 
-	// If this is a colony executor deployment, generate a unique executor name
+	// If this is a colony executor deployment, use the container name as executor name
+	// (the container name is now the unique executor name generated in Reconcile())
 	if spec.ExecutorName != "" {
-		uniqueExecutorName, err := r.generateUniqueExecutorName(colonyName, spec.ExecutorName)
-		if err != nil {
-			return fmt.Errorf("failed to generate unique executor name: %w", err)
-		}
-		envVars = append(envVars, "COLONIES_EXECUTOR_NAME="+uniqueExecutorName)
+		envVars = append(envVars, "COLONIES_EXECUTOR_NAME="+containerName)
 		log.WithFields(log.Fields{
-			"BaseExecutorName":   spec.ExecutorName,
-			"UniqueExecutorName": uniqueExecutorName,
-			"ContainerName":      containerName,
-		}).Info("Generated unique executor name")
-		r.addLog(process, fmt.Sprintf("Generated unique executor name: %s", uniqueExecutorName))
+			"BaseExecutorName": spec.ExecutorName,
+			"ExecutorName":     containerName,
+			"ContainerName":    containerName,
+		}).Info("Using container name as executor name")
+		r.addLog(process, fmt.Sprintf("Executor name: %s", containerName))
 	}
 
 	// Create container config

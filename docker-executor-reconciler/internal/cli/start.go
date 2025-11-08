@@ -5,8 +5,8 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/colonyos/executors/deployment-controller/pkg/build"
-	"github.com/colonyos/executors/deployment-controller/pkg/executor"
+	"github.com/colonyos/executors/docker-executor-reconciler/pkg/build"
+	"github.com/colonyos/executors/docker-executor-reconciler/pkg/executor"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -142,6 +142,6 @@ func parseEnv() {
 
 	executorType = os.Getenv("COLONIES_EXECUTOR_TYPE")
 	if executorType == "" {
-		executorType = "deployment-controller"
+		executorType = "docker-executor-reconciler"
 	}
 }

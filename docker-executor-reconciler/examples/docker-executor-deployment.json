@@ -6,8 +6,8 @@
   "spec": {
     "image": "colonyos/dockerexecutor:v1.0.5",
     "replicas": 3,
-    "executorType": "deployment-controller",
-    "executorName": "docker",
+    "executorType": "docker-executor-reconciler",
+    "executorName": "docker-executor",
     "env": {
       "LANG": "en_US.UTF-8",
       "LANGUAGE": "en_US.UTF-8",

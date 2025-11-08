@@ -5,13 +5,14 @@ import (
 	"errors"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/colonyos/colonies/pkg/client"
 	"github.com/colonyos/colonies/pkg/core"
 	"github.com/colonyos/colonies/pkg/security/crypto"
-	"github.com/colonyos/executors/deployment-controller/pkg/reconciler"
+	"github.com/colonyos/executors/docker-executor-reconciler/pkg/reconciler"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -30,6 +31,8 @@ type Executor struct {
 	cancel             context.CancelFunc
 	client             *client.ColoniesClient
 	reconciler         *reconciler.Reconciler
+	managedResources   map[string]*core.Resource // resourceID -> resource
+	resourcesMutex     sync.RWMutex
 }
 
 type ExecutorOption func(*Executor)
@@ -112,7 +115,9 @@ func (e *Executor) createColoniesExecutorWithKey(colonyName string) (*core.Execu
 }
 
 func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
-	e := &Executor{}
+	e := &Executor{
+		managedResources: make(map[string]*core.Resource),
+	}
 	for _, opt := range opts {
 		opt(e)
 	}
@@ -177,6 +182,9 @@ func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
 		"ExecutorPrvKey":     "***********************",
 		"ExecutorType":       e.executorType}).
 		Info("Deployment Controller Executor started")
+
+	// Start periodic status update goroutine
+	go e.periodicStatusUpdate()
 
 	return e, nil
 }
@@ -277,11 +285,48 @@ func (e *Executor) handleReconcile(process *core.Process) {
 		return
 	}
 
-	// Close the process as successful
-	if err := e.client.Close(process.ID, e.executorPrvKey); err != nil {
-		log.WithFields(log.Fields{"ProcessID": process.ID, "Error": err}).Error("Failed to close process")
+	// Track or untrack the resource based on the action
+	if reconciliation.Action == "delete" {
+		// Remove from managed resources
+		e.resourcesMutex.Lock()
+		delete(e.managedResources, resource.ID)
+		e.resourcesMutex.Unlock()
+		log.WithFields(log.Fields{"ResourceID": resource.ID, "ResourceName": resource.Metadata.Name}).Info("Removed resource from managed resources")
 	} else {
-		log.WithFields(log.Fields{"ProcessID": process.ID}).Info("Process completed successfully")
+		// Add/update in managed resources (for create and update actions)
+		e.resourcesMutex.Lock()
+		e.managedResources[resource.ID] = resource
+		e.resourcesMutex.Unlock()
+		log.WithFields(log.Fields{"ResourceID": resource.ID, "ResourceName": resource.Metadata.Name}).Info("Added/updated resource in managed resources")
+	}
+
+	// Collect status after successful reconciliation
+	status, err := e.reconciler.CollectStatus(resource)
+	if err != nil {
+		log.WithFields(log.Fields{"Error": err, "ResourceName": resource.Metadata.Name}).Warn("Failed to collect resource status")
+		// Don't fail the process - reconciliation succeeded, status collection is best-effort
+		// Close without status output
+		if err := e.client.Close(process.ID, e.executorPrvKey); err != nil {
+			log.WithFields(log.Fields{"ProcessID": process.ID, "Error": err}).Error("Failed to close process")
+		} else {
+			log.WithFields(log.Fields{"ProcessID": process.ID}).Info("Process completed successfully")
+		}
+	} else {
+		// Close the process with status output so the server can update the resource
+		output := []interface{}{
+			map[string]interface{}{
+				"status": status,
+			},
+		}
+		if err := e.client.CloseWithOutput(process.ID, output, e.executorPrvKey); err != nil {
+			log.WithFields(log.Fields{"ProcessID": process.ID, "Error": err}).Error("Failed to close process with output")
+		} else {
+			log.WithFields(log.Fields{
+				"ProcessID":      process.ID,
+				"ResourceName":   resource.Metadata.Name,
+				"TotalReplicas": status["totalReplicas"],
+			}).Info("Process completed successfully with status update")
+		}
 	}
 }
 
@@ -291,4 +336,77 @@ func (e *Executor) failProcess(process *core.Process, reason string) {
 	if err != nil {
 		log.WithFields(log.Fields{"ProcessID": process.ID, "Error": err}).Error("Failed to mark process as failed")
 	}
+}
+
+// periodicStatusUpdate runs in a goroutine and updates status for all managed resources every 10 seconds
+func (e *Executor) periodicStatusUpdate() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-e.ctx.Done():
+			log.Info("Stopping periodic status updates")
+			return
+		case <-ticker.C:
+			e.updateAllResourceStatuses()
+		}
+	}
+}
+
+// updateAllResourceStatuses updates status for all managed resources
+func (e *Executor) updateAllResourceStatuses() {
+	e.resourcesMutex.RLock()
+	resources := make([]*core.Resource, 0, len(e.managedResources))
+	for _, resource := range e.managedResources {
+		resources = append(resources, resource)
+	}
+	e.resourcesMutex.RUnlock()
+
+	for _, resource := range resources {
+		e.updateResourceStatus(resource)
+	}
+}
+
+// updateResourceStatus collects and updates the status for a single resource
+func (e *Executor) updateResourceStatus(resource *core.Resource) {
+	// Collect current status
+	status, err := e.reconciler.CollectStatus(resource)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"Error":        err,
+			"ResourceName": resource.Metadata.Name,
+			"ResourceID":   resource.ID,
+		}).Warn("Failed to collect resource status during periodic update")
+		return
+	}
+
+	// Get the latest version of the resource from the server
+	latestResource, err := e.client.GetResource(e.colonyName, resource.Metadata.Name, e.executorPrvKey)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"Error":        err,
+			"ResourceName": resource.Metadata.Name,
+		}).Warn("Failed to get latest resource during periodic update")
+		return
+	}
+
+	// Update only the status field
+	latestResource.Status = status
+
+	// Send the update to the server
+	_, err = e.client.UpdateResource(latestResource, e.executorPrvKey)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"Error":        err,
+			"ResourceName": resource.Metadata.Name,
+		}).Warn("Failed to update resource status during periodic update")
+		return
+	}
+
+	log.WithFields(log.Fields{
+		"ResourceName":   resource.Metadata.Name,
+		"TotalReplicas":  status["totalReplicas"],
+		"RunningReplicas": status["runningReplicas"],
+	}).Debug("Updated resource status")
 }
