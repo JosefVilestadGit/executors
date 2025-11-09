@@ -188,29 +188,29 @@ func (r *Reconciler) generateUniqueExecutorName(colonyName, baseExecutorName str
 	return "", fmt.Errorf("failed to generate unique executor name after %d retries", maxRetries)
 }
 
-// Reconcile processes a service and ensures the desired state
-func (r *Reconciler) Reconcile(process *core.Process, service *core.Service) error {
+// Reconcile processes a blueprint and ensures the desired state
+func (r *Reconciler) Reconcile(process *core.Process, blueprint *core.Blueprint) error {
 	log.WithFields(log.Fields{
-		"ResourceName": service.Metadata.Name,
-		"ResourceKind": service.Kind,
+		"ResourceName": blueprint.Metadata.Name,
+		"ResourceKind": blueprint.Kind,
 	}).Info("Starting reconciliation")
 
-	// Branch based on service kind
-	switch service.Kind {
+	// Branch based on blueprint kind
+	switch blueprint.Kind {
 	case "ExecutorDeployment":
-		return r.reconcileExecutorDeployment(process, service)
+		return r.reconcileExecutorDeployment(process, blueprint)
 	case "DockerDeployment":
-		return r.reconcileDockerDeployment(process, service)
+		return r.reconcileDockerDeployment(process, blueprint)
 	default:
-		return fmt.Errorf("unsupported service kind: %s", service.Kind)
+		return fmt.Errorf("unsupported blueprint kind: %s", blueprint.Kind)
 	}
 }
 
-// reconcileExecutorDeployment handles ExecutorDeployment services
-func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, service *core.Service) error {
+// reconcileExecutorDeployment handles ExecutorDeployment blueprints
+func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, blueprint *core.Blueprint) error {
 	// Parse the deployment spec
 	var spec DeploymentSpec
-	specBytes, err := json.Marshal(service.Spec)
+	specBytes, err := json.Marshal(blueprint.Spec)
 	if err != nil {
 		return fmt.Errorf("failed to marshal spec: %w", err)
 	}
@@ -233,7 +233,7 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, service 
 	}).Info("Reconciling deployment")
 
 	// Add logs to the process
-	r.addLog(process, fmt.Sprintf("Reconciling ExecutorDeployment: %s", service.Metadata.Name))
+	r.addLog(process, fmt.Sprintf("Reconciling ExecutorDeployment: %s", blueprint.Metadata.Name))
 	r.addLog(process, fmt.Sprintf("Image: %s, Replicas: %d", spec.Image, spec.Replicas))
 
 	// Pull the container image
@@ -242,14 +242,14 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, service 
 	}
 
 	// Get currently running containers for this deployment
-	existingContainers, err := r.listContainersByLabel(service.Metadata.Name)
+	existingContainers, err := r.listContainersByLabel(blueprint.Metadata.Name)
 	if err != nil {
 		r.addLog(process, fmt.Sprintf("Warning: Failed to list existing containers: %v", err))
 		existingContainers = []string{} // Continue with empty list
 	}
 
 	// Check for dirty containers (generation mismatch) and recreate them
-	dirtyContainers, err := r.findDirtyContainers(existingContainers, service.Metadata.Generation)
+	dirtyContainers, err := r.findDirtyContainers(existingContainers, blueprint.Metadata.Generation)
 	if err != nil {
 		r.addLog(process, fmt.Sprintf("Warning: Failed to check for dirty containers: %v", err))
 	} else if len(dirtyContainers) > 0 {
@@ -276,15 +276,15 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, service 
 			}
 
 			// Recreate the container with new spec and generation
-			if err := r.startContainer(process, spec, containerName, service); err != nil {
+			if err := r.startContainer(process, spec, containerName, blueprint); err != nil {
 				r.addLog(process, fmt.Sprintf("Error recreating container %s: %v", containerName, err))
 				return fmt.Errorf("failed to recreate container %s: %w", containerName, err)
 			}
-			r.addLog(process, fmt.Sprintf("Recreated container: %s with generation %d", containerName, service.Metadata.Generation))
+			r.addLog(process, fmt.Sprintf("Recreated container: %s with generation %d", containerName, blueprint.Metadata.Generation))
 		}
 
 		// Refresh the container list after recreating dirty ones
-		existingContainers, err = r.listContainersByLabel(service.Metadata.Name)
+		existingContainers, err = r.listContainersByLabel(blueprint.Metadata.Name)
 		if err != nil {
 			r.addLog(process, fmt.Sprintf("Warning: Failed to refresh container list: %v", err))
 			existingContainers = []string{}
@@ -304,7 +304,7 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, service 
 			// Generate unique executor name that will be used as both container name and executor name
 			var containerName string
 			if spec.ExecutorName != "" {
-				uniqueExecutorName, err := r.generateUniqueExecutorName(service.Metadata.Namespace, spec.ExecutorName)
+				uniqueExecutorName, err := r.generateUniqueExecutorName(blueprint.Metadata.Namespace, spec.ExecutorName)
 				if err != nil {
 					r.addLog(process, fmt.Sprintf("Error generating unique executor name: %v", err))
 					return fmt.Errorf("failed to generate unique executor name: %w", err)
@@ -312,10 +312,10 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, service 
 				containerName = uniqueExecutorName
 			} else {
 				// For non-executor deployments, use index-based naming
-				containerName = fmt.Sprintf("%s-%d", service.Metadata.Name, currentReplicas+i)
+				containerName = fmt.Sprintf("%s-%d", blueprint.Metadata.Name, currentReplicas+i)
 			}
 
-			if err := r.startContainer(process, spec, containerName, service); err != nil {
+			if err := r.startContainer(process, spec, containerName, blueprint); err != nil {
 				r.addLog(process, fmt.Sprintf("Error starting container %s: %v", containerName, err))
 				return fmt.Errorf("failed to start container %s: %w", containerName, err)
 			}
@@ -342,11 +342,11 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, service 
 	return nil
 }
 
-// reconcileDockerDeployment handles DockerDeployment services
-func (r *Reconciler) reconcileDockerDeployment(process *core.Process, service *core.Service) error {
+// reconcileDockerDeployment handles DockerDeployment blueprints
+func (r *Reconciler) reconcileDockerDeployment(process *core.Process, blueprint *core.Blueprint) error {
 	// Parse the docker deployment spec
 	var spec DockerDeploymentSpec
-	specBytes, err := json.Marshal(service.Spec)
+	specBytes, err := json.Marshal(blueprint.Spec)
 	if err != nil {
 		return fmt.Errorf("failed to marshal spec: %w", err)
 	}
@@ -360,10 +360,10 @@ func (r *Reconciler) reconcileDockerDeployment(process *core.Process, service *c
 		return fmt.Errorf("at least one instance is required")
 	}
 
-	r.addLog(process, fmt.Sprintf("Reconciling DockerDeployment: %s with %d instance(s)", service.Metadata.Name, len(spec.Instances)))
+	r.addLog(process, fmt.Sprintf("Reconciling DockerDeployment: %s with %d instance(s)", blueprint.Metadata.Name, len(spec.Instances)))
 
 	// Get currently running containers for this deployment
-	existingContainers, err := r.listContainersByLabel(service.Metadata.Name)
+	existingContainers, err := r.listContainersByLabel(blueprint.Metadata.Name)
 	if err != nil {
 		r.addLog(process, fmt.Sprintf("Warning: Failed to list existing containers: %v", err))
 		existingContainers = []string{} // Continue with empty list
@@ -423,10 +423,10 @@ func (r *Reconciler) reconcileDockerDeployment(process *core.Process, service *c
 					if _, err := fmt.Sscanf(generationStr, "%d", &containerGeneration); err != nil {
 						isDirty = true
 						r.addLog(process, fmt.Sprintf("Container %s has invalid generation label, recreating", instance.Name))
-					} else if containerGeneration < service.Metadata.Generation {
+					} else if containerGeneration < blueprint.Metadata.Generation {
 						isDirty = true
 						r.addLog(process, fmt.Sprintf("Container %s has outdated generation (%d < %d), recreating",
-							instance.Name, containerGeneration, service.Metadata.Generation))
+							instance.Name, containerGeneration, blueprint.Metadata.Generation))
 					}
 				}
 
@@ -436,17 +436,17 @@ func (r *Reconciler) reconcileDockerDeployment(process *core.Process, service *c
 						return fmt.Errorf("failed to remove dirty container %s: %w", instance.Name, err)
 					}
 					// Create new container
-					if err := r.startDockerDeploymentInstance(process, instance, service); err != nil {
+					if err := r.startDockerDeploymentInstance(process, instance, blueprint); err != nil {
 						return fmt.Errorf("failed to start instance %s: %w", instance.Name, err)
 					}
-					r.addLog(process, fmt.Sprintf("Recreated container: %s with generation %d", instance.Name, service.Metadata.Generation))
+					r.addLog(process, fmt.Sprintf("Recreated container: %s with generation %d", instance.Name, blueprint.Metadata.Generation))
 				} else {
 					r.addLog(process, fmt.Sprintf("Container %s is up to date", instance.Name))
 				}
 			}
 		} else {
 			// Container doesn't exist, create it
-			if err := r.startDockerDeploymentInstance(process, instance, service); err != nil {
+			if err := r.startDockerDeploymentInstance(process, instance, blueprint); err != nil {
 				return fmt.Errorf("failed to start instance %s: %w", instance.Name, err)
 			}
 			r.addLog(process, fmt.Sprintf("Created container: %s", instance.Name))
@@ -468,10 +468,10 @@ func (r *Reconciler) reconcileDockerDeployment(process *core.Process, service *c
 	return nil
 }
 
-// CollectStatus gathers current status of instances for a service
-func (r *Reconciler) CollectStatus(service *core.Service) (map[string]interface{}, error) {
+// CollectStatus gathers current status of instances for a blueprint
+func (r *Reconciler) CollectStatus(blueprint *core.Blueprint) (map[string]interface{}, error) {
 	// Get list of containers for this deployment
-	containerIDs, err := r.listContainersByLabel(service.Metadata.Name)
+	containerIDs, err := r.listContainersByLabel(blueprint.Metadata.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
@@ -549,7 +549,7 @@ func (r *Reconciler) pullImage(process *core.Process, image string) error {
 	}
 }
 
-func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, containerName string, service *core.Service) error {
+func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, containerName string, blueprint *core.Blueprint) error {
 	ctx := context.Background()
 
 	// Check if a container with this name already exists (running or stopped)
@@ -587,7 +587,7 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 	for k, v := range spec.Env {
 		envVars = append(envVars, fmt.Sprintf("%s=%v", k, v))
 	}
-	envVars = append(envVars, "COLONIES_DEPLOYMENT="+service.Metadata.Name)
+	envVars = append(envVars, "COLONIES_DEPLOYMENT="+blueprint.Metadata.Name)
 	envVars = append(envVars, "COLONIES_CONTAINER_NAME="+containerName)
 
 	// If this is a colony executor deployment, use the container name as executor name
@@ -607,9 +607,9 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 		Image: spec.Image,
 		Env:   envVars,
 		Labels: map[string]string{
-			"colonies.deployment": service.Metadata.Name,
+			"colonies.deployment": blueprint.Metadata.Name,
 			"colonies.managed":    "true",
-			"colonies.generation": fmt.Sprintf("%d", service.Metadata.Generation),
+			"colonies.generation": fmt.Sprintf("%d", blueprint.Metadata.Generation),
 		},
 	}
 
@@ -677,11 +677,11 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 
 	// Create network config to attach to colonies network
 	// Add network alias using the deployment name so containers can reach each other
-	// by service name (e.g., c1-database) instead of random container name (c1-database-e9328)
+	// by blueprint name (e.g., c1-database) instead of random container name (c1-database-e9328)
 	networkConfig := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{
 			"colonies_default": {
-				Aliases: []string{service.Metadata.Name},
+				Aliases: []string{blueprint.Metadata.Name},
 			},
 		},
 	}
@@ -707,7 +707,7 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 }
 
 // startDockerDeploymentInstance creates and starts a container from a ContainerInstance spec
-func (r *Reconciler) startDockerDeploymentInstance(process *core.Process, instance ContainerInstance, service *core.Service) error {
+func (r *Reconciler) startDockerDeploymentInstance(process *core.Process, instance ContainerInstance, blueprint *core.Blueprint) error {
 	ctx := context.Background()
 	containerName := instance.Name
 
@@ -716,7 +716,7 @@ func (r *Reconciler) startDockerDeploymentInstance(process *core.Process, instan
 	for k, v := range instance.Environment {
 		envVars = append(envVars, fmt.Sprintf("%s=%s", k, v))
 	}
-	envVars = append(envVars, "COLONIES_DEPLOYMENT="+service.Metadata.Name)
+	envVars = append(envVars, "COLONIES_DEPLOYMENT="+blueprint.Metadata.Name)
 	envVars = append(envVars, "COLONIES_CONTAINER_NAME="+containerName)
 
 	// Create container config
@@ -724,9 +724,9 @@ func (r *Reconciler) startDockerDeploymentInstance(process *core.Process, instan
 		Image: instance.Image,
 		Env:   envVars,
 		Labels: map[string]string{
-			"colonies.deployment": service.Metadata.Name,
+			"colonies.deployment": blueprint.Metadata.Name,
 			"colonies.managed":    "true",
-			"colonies.generation": fmt.Sprintf("%d", service.Metadata.Generation),
+			"colonies.generation": fmt.Sprintf("%d", blueprint.Metadata.Generation),
 		},
 	}
 
@@ -824,11 +824,11 @@ func (r *Reconciler) startDockerDeploymentInstance(process *core.Process, instan
 		// Memory limits would go here (not implemented in this version)
 	}
 
-	// Network configuration - use service name as network alias
+	// Network configuration - use blueprint name as network alias
 	networkConfig := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{
 			"colonies_default": {
-				Aliases: []string{service.Metadata.Name, containerName},
+				Aliases: []string{blueprint.Metadata.Name, containerName},
 			},
 		},
 	}

@@ -7,7 +7,7 @@ import (
 var rootCmd = &cobra.Command{
 	Use:   "docker-executor-reconciler",
 	Short: "ColonyOS Docker Executor Reconciler",
-	Long:  `A ColonyOS executor that reconciles Docker container deployments based on ExecutorDeployment services`,
+	Long:  `A ColonyOS executor that reconciles Docker container deployments based on ExecutorDeployment blueprints`,
 }
 
 func Execute() {

@@ -31,7 +31,7 @@ type Executor struct {
 	cancel             context.CancelFunc
 	client             *client.ColoniesClient
 	reconciler         *reconciler.Reconciler
-	managedResources   map[string]*core.Service // resourceID -> service
+	managedResources   map[string]*core.Blueprint // resourceID -> blueprint
 	resourcesMutex     sync.RWMutex
 }
 
@@ -116,7 +116,7 @@ func (e *Executor) createColoniesExecutorWithKey(colonyName string) (*core.Execu
 
 func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
 	e := &Executor{
-		managedResources: make(map[string]*core.Service),
+		managedResources: make(map[string]*core.Blueprint),
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -256,51 +256,51 @@ func (e *Executor) handleReconcile(process *core.Process) {
 
 	reconciliation := process.FunctionSpec.Reconciliation
 
-	// For deployment-controller, we work with the "New" service (the desired state)
-	// The reconciliation.New contains the current/desired service state
+	// For deployment-controller, we work with the "New" blueprint (the desired state)
+	// The reconciliation.New contains the current/desired blueprint state
 	// The reconciliation.Old contains the previous state (nil for create, set for update)
-	var service *core.Service
+	var blueprint *core.Blueprint
 	if reconciliation.New != nil {
-		service = reconciliation.New
+		blueprint = reconciliation.New
 	} else if reconciliation.Old != nil {
 		// For delete operations, Old is set and New is nil
-		service = reconciliation.Old
+		blueprint = reconciliation.Old
 	} else {
-		e.failProcess(process, "No service found in reconciliation data")
+		e.failProcess(process, "No blueprint found in reconciliation data")
 		return
 	}
 
 	log.WithFields(log.Fields{
-		"ResourceName": service.Metadata.Name,
-		"ResourceKind": service.Kind,
+		"ResourceName": blueprint.Metadata.Name,
+		"ResourceKind": blueprint.Kind,
 		"Action":       reconciliation.Action,
-	}).Info("Processing service reconciliation")
+	}).Info("Processing blueprint reconciliation")
 
 	// Perform reconciliation
-	if err := e.reconciler.Reconcile(process, service); err != nil {
+	if err := e.reconciler.Reconcile(process, blueprint); err != nil {
 		e.failProcess(process, "Reconciliation failed: "+err.Error())
 		return
 	}
 
-	// Track or untrack the service based on the action
+	// Track or untrack the blueprint based on the action
 	if reconciliation.Action == "delete" {
-		// Remove from managed services
+		// Remove from managed blueprints
 		e.resourcesMutex.Lock()
-		delete(e.managedResources, service.ID)
+		delete(e.managedResources, blueprint.ID)
 		e.resourcesMutex.Unlock()
-		log.WithFields(log.Fields{"ResourceID": service.ID, "ResourceName": service.Metadata.Name}).Info("Removed service from managed services")
+		log.WithFields(log.Fields{"ResourceID": blueprint.ID, "ResourceName": blueprint.Metadata.Name}).Info("Removed blueprint from managed blueprints")
 	} else {
-		// Add/update in managed services (for create and update actions)
+		// Add/update in managed blueprints (for create and update actions)
 		e.resourcesMutex.Lock()
-		e.managedResources[service.ID] = service
+		e.managedResources[blueprint.ID] = blueprint
 		e.resourcesMutex.Unlock()
-		log.WithFields(log.Fields{"ResourceID": service.ID, "ResourceName": service.Metadata.Name}).Info("Added/updated service in managed services")
+		log.WithFields(log.Fields{"ResourceID": blueprint.ID, "ResourceName": blueprint.Metadata.Name}).Info("Added/updated blueprint in managed blueprints")
 	}
 
 	// Collect status after successful reconciliation
-	status, err := e.reconciler.CollectStatus(service)
+	status, err := e.reconciler.CollectStatus(blueprint)
 	if err != nil {
-		log.WithFields(log.Fields{"Error": err, "ResourceName": service.Metadata.Name}).Warn("Failed to collect service status")
+		log.WithFields(log.Fields{"Error": err, "ResourceName": blueprint.Metadata.Name}).Warn("Failed to collect blueprint status")
 		// Don't fail the process - reconciliation succeeded, status collection is best-effort
 		// Close without status output
 		if err := e.client.Close(process.ID, e.executorPrvKey); err != nil {
@@ -309,7 +309,7 @@ func (e *Executor) handleReconcile(process *core.Process) {
 			log.WithFields(log.Fields{"ProcessID": process.ID}).Info("Process completed successfully")
 		}
 	} else {
-		// Close the process with status output so the server can update the service
+		// Close the process with status output so the server can update the blueprint
 		output := []interface{}{
 			map[string]interface{}{
 				"status": status,
@@ -320,7 +320,7 @@ func (e *Executor) handleReconcile(process *core.Process) {
 		} else {
 			log.WithFields(log.Fields{
 				"ProcessID":      process.ID,
-				"ResourceName":   service.Metadata.Name,
+				"ResourceName":   blueprint.Metadata.Name,
 				"TotalInstances": status["totalInstances"],
 			}).Info("Process completed successfully with status update")
 		}
