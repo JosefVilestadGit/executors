@@ -1,246 +1,237 @@
 # Docker Reconciler
 
-A ColonyOS executor that acts as a Kubernetes-style controller for managing Docker containers declaratively. It watches for blueprint changes (ExecutorDeployments and DockerDeployments) and reconciles the desired state with actual running containers.
+A ColonyOS executor that acts as a Kubernetes-style controller for managing Docker containers declaratively. It watches for blueprint changes and reconciles the desired state with actual running containers.
 
 ## Table of Contents
 
+- [What is Docker Reconciler?](#what-is-docker-reconciler)
+- [Core Concepts](#core-concepts)
 - [Architecture](#architecture)
-- [How It Works](#how-it-works)
 - [Blueprint Types](#blueprint-types)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
 - [Usage Examples](#usage-examples)
 - [Container Management](#container-management)
-- [Node Registration](#node-registration)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
 
-## Architecture
+## What is Docker Reconciler?
 
-### High-Level Overview
+The Docker Reconciler is a **declarative container management system** for ColonyOS. Instead of manually starting and stopping containers, you declare what you want (the desired state), and the reconciler ensures it happens.
 
-```mermaid
-graph TB
-    subgraph "ColonyOS Server"
-        BS[Blueprint Store]
-        PS[Process Scheduler]
-    end
+**Think of it like Kubernetes, but simpler:**
+- You define a blueprint (like a Kubernetes deployment)
+- The reconciler watches for changes
+- Containers are automatically created, updated, or removed to match your blueprint
 
-    subgraph "Docker Host"
-        DR[Docker Reconciler<br/>Executor]
-        DD[Docker Daemon]
+**Key Benefits:**
+- **Declarative**: Describe what you want, not how to do it
+- **Self-healing**: Reconciler constantly ensures actual state matches desired state
+- **Version tracking**: Uses generation counters to detect and apply updates
+- **Zero-downtime updates**: Containers are recreated when configuration changes
 
-        subgraph "Managed Containers"
-            C1[Container 1]
-            C2[Container 2]
-            C3[Container N]
-        end
-    end
+## Core Concepts
 
-    User[User/CLI] -->|1. Create/Update<br/>Blueprint| BS
-    BS -->|2. Trigger<br/>Reconciliation| PS
-    PS -->|3. Assign Process| DR
-    DR -->|4. Pull Images| DD
-    DR -->|5. Reconcile State| DD
-    DD -->|6. Manage| C1
-    DD -->|6. Manage| C2
-    DD -->|6. Manage| C3
-    DR -->|7. Report Status| PS
-    PS -->|8. Update Blueprint<br/>Status| BS
+### 1. Blueprints
 
-    style DR fill:#4CAF50
-    style DD fill:#2196F3
-    style BS fill:#FF9800
-    style C1 fill:#9E9E9E
-    style C2 fill:#9E9E9E
-    style C3 fill:#9E9E9E
+A **blueprint** is a JSON specification that describes what containers you want running. It's similar to a Kubernetes deployment or a docker-compose file.
+
+Example - a simple web server blueprint:
+```json
+{
+  "kind": "ExecutorDeployment",
+  "metadata": {
+    "name": "web-server"
+  },
+  "spec": {
+    "image": "nginx:latest",
+    "replicas": 3
+  }
+}
 ```
 
-### Components
+This tells the reconciler: "I want 3 nginx containers running, named web-server".
 
-1. **ColonyOS Server**: Stores blueprints and triggers reconciliation processes
-2. **Docker Reconciler**: Executor that watches for reconciliation processes and manages containers
-3. **Docker Daemon**: Runs the actual containers
-4. **Managed Containers**: Containers deployed and tracked by the reconciler
+### 2. Reconciliation
 
-## How It Works
+**Reconciliation** is the process of making reality match your blueprint. The reconciler:
 
-### Reconciliation Loop
+1. **Reads** your blueprint (desired state)
+2. **Lists** currently running containers (actual state)
+3. **Compares** them
+4. **Takes action** to match desired state:
+   - Start new containers if too few
+   - Stop excess containers if too many
+   - Recreate containers if configuration changed
+
+This happens automatically whenever you create or update a blueprint.
+
+### 3. Generation Tracking
+
+Every time you update a blueprint, the **generation counter** increments. This allows the reconciler to detect which containers are outdated.
+
+**Example:**
+- You create a blueprint with `replicas: 3` → Generation 1
+- 3 containers start, each labeled with `generation: 1`
+- You update to `replicas: 5, env: PROD=true` → Generation 2
+- Reconciler sees: 3 containers with generation 1 (outdated) + need 2 more
+- It **recreates** the 3 old containers with new env vars
+- It **creates** 2 new containers
+- Result: 5 containers, all with generation 2
+
+**Why this matters:** When you change environment variables, ports, or any configuration, containers are automatically recreated with the new settings.
+
+### 4. Labels
+
+Every managed container gets Docker labels:
+- `colonies.deployment=<name>`: Links container to its blueprint
+- `colonies.managed=true`: Marks it as managed by ColonyOS
+- `colonies.generation=<number>`: Tracks the blueprint version
+
+These labels allow the reconciler to:
+- Find all containers belonging to a deployment
+- Identify outdated containers that need updating
+- Clean up containers when blueprints are deleted
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph User Layer
+        U[User/CLI]
+    end
+
+    subgraph ColonyOS Server
+        B[Blueprint Store]
+        S[Scheduler]
+    end
+
+    subgraph Docker Host
+        R[Docker Reconciler]
+        D[Docker Daemon]
+        C1[Container 1]
+        C2[Container 2]
+        C3[Container N]
+    end
+
+    U -->|1. Create Blueprint| B
+    B -->|2. Trigger Process| S
+    S -->|3. Assign to Reconciler| R
+    R -->|4. Manage Containers| D
+    D --> C1
+    D --> C2
+    D --> C3
+    R -->|5. Report Status| S
+    S -->|6. Update Blueprint| B
+```
+
+### How It Works
+
+**Step 1: User Creates Blueprint**
+- You write a JSON specification describing your containers
+- Submit it to ColonyOS: `colonies blueprint add --spec deployment.json`
+
+**Step 2: Server Triggers Reconciliation**
+- ColonyOS stores the blueprint with a generation number
+- Creates a reconciliation process
+- Assigns it to the Docker Reconciler executor
+
+**Step 3: Reconciler Takes Action**
+- Receives the blueprint
+- Lists existing containers by label (`colonies.deployment=<name>`)
+- Compares actual vs desired state
+
+**Step 4: Container Management**
+- Pulls container images if needed
+- Checks generation labels to find outdated containers
+- Recreates containers with wrong generation
+- Scales up (starts new containers) or down (stops excess)
+
+**Step 5: Status Reporting**
+- Reconciler collects container states
+- Reports back to ColonyOS server
+- Server updates blueprint status
+
+### Reconciliation Flow
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant Server as ColonyOS Server
-    participant Reconciler as Docker Reconciler
-    participant Docker as Docker Daemon
+    participant Server
+    participant Reconciler
+    participant Docker
 
     User->>Server: Create/Update Blueprint
-    Note over Server: Blueprint stored with<br/>generation counter
-    Server->>Server: Trigger reconciliation<br/>process
-    Server->>Reconciler: Assign process with<br/>blueprint data
+    Note over Server: Generation: 1 → 2
+    Server->>Reconciler: Trigger reconciliation
 
-    Reconciler->>Docker: List existing containers<br/>(by label)
-    Docker-->>Reconciler: Container list
+    Reconciler->>Docker: List containers
+    Docker-->>Reconciler: [container1, container2]
 
-    Reconciler->>Reconciler: Compare actual vs<br/>desired state
+    Reconciler->>Reconciler: Compare generations
+    Note over Reconciler: Container1: gen 1 (OLD)<br/>Container2: gen 1 (OLD)<br/>Need: gen 2
 
-    alt Containers need update (generation mismatch)
-        Reconciler->>Docker: Stop dirty containers
-        Reconciler->>Docker: Start new containers<br/>with updated config
-    end
+    Reconciler->>Docker: Stop old containers
+    Reconciler->>Docker: Start new containers
+    Note over Docker: All containers now gen 2
 
-    alt Scale up needed
-        Reconciler->>Docker: Pull image (if needed)
-        Reconciler->>Docker: Start new containers
-    end
-
-    alt Scale down needed
-        Reconciler->>Docker: Stop excess containers
-    end
-
-    Reconciler->>Docker: Collect container status
-    Docker-->>Reconciler: Container states
-    Reconciler->>Server: Report status
-    Server->>Server: Update blueprint status
+    Reconciler->>Server: Report success
 ```
-
-### Generation-Based Updates
-
-The reconciler uses a **generation counter** to track blueprint changes:
-
-```mermaid
-graph LR
-    subgraph "Blueprint Update Flow"
-        V1[Blueprint v1<br/>Generation: 1] -->|User updates| V2[Blueprint v2<br/>Generation: 2]
-        V2 -->|User updates| V3[Blueprint v3<br/>Generation: 3]
-    end
-
-    subgraph "Container Labels"
-        L1[Container A<br/>generation: 1<br/> Dirty]
-        L2[Container B<br/>generation: 2<br/> Dirty]
-        L3[Container C<br/>generation: 3<br/> Up to date]
-    end
-
-    V3 -.->|Reconcile| L1
-    V3 -.->|Reconcile| L2
-    V3 -.->|Reconcile| L3
-
-    style L1 fill:#f44336
-    style L2 fill:#f44336
-    style L3 fill:#4CAF50
-```
-
-When a blueprint is updated:
-1. Server increments the generation counter
-2. Reconciler compares container labels with blueprint generation
-3. Containers with outdated generation are **recreated** with new config
-4. Containers with current generation are left running
 
 ## Blueprint Types
 
 The reconciler supports two types of blueprints:
 
-### 1. ExecutorDeployment
+### ExecutorDeployment - Simple Scaling
 
-Simple container deployments with replica scaling.
+**Use for:** Simple services that need multiple identical replicas
 
-```mermaid
-graph TB
-    subgraph "ExecutorDeployment Spec"
-        ED[ExecutorDeployment]
-        ED --> Image[image: nginx:latest]
-        ED --> Replicas[replicas: 3]
-        ED --> Env[env: KEY=VALUE]
-        ED --> Type[executorType:<br/>deployment-controller]
-    end
+**Features:**
+- Replica count (automatic scaling)
+- Environment variables
+- Port mappings
+- Volume mounts
+- Command/entrypoint override
 
-    subgraph "Resulting Containers"
-        C1[nginx-deploy-0]
-        C2[nginx-deploy-1]
-        C3[nginx-deploy-2]
-    end
-
-    ED -.->|Creates| C1
-    ED -.->|Creates| C2
-    ED -.->|Creates| C3
-
-    style ED fill:#4CAF50
-    style C1 fill:#2196F3
-    style C2 fill:#2196F3
-    style C3 fill:#2196F3
-```
-
-**Use Case**: Simple services that need scaling (web servers, workers, etc.)
-
-**Example**:
+**Example:** Run 5 identical nginx web servers
 ```json
 {
   "kind": "ExecutorDeployment",
   "metadata": {
-    "name": "nginx-deployment"
+    "name": "nginx"
   },
   "spec": {
     "image": "nginx:latest",
-    "replicas": 3,
-    "executorType": "deployment-controller",
+    "replicas": 5,
     "env": {
-      "ENVIRONMENT": "production"
-    }
+      "NGINX_HOST": "example.com",
+      "NGINX_PORT": "80"
+    },
+    "ports": [
+      {
+        "name": "http",
+        "port": 80
+      }
+    ]
   }
 }
 ```
 
-### 2. DockerDeployment
+**Result:** 5 containers named `nginx-0`, `nginx-1`, `nginx-2`, `nginx-3`, `nginx-4`
 
-Multi-container deployments with advanced configuration (like Docker Compose).
+### DockerDeployment - Multi-Container Apps
 
-```mermaid
-graph TB
-    subgraph "DockerDeployment Spec"
-        DD[DockerDeployment]
-        DD --> I1[Instance 1:<br/>Database]
-        DD --> I2[Instance 2:<br/>API Server]
-        DD --> I3[Instance 3:<br/>Web Frontend]
+**Use for:** Complex applications with multiple different services (like docker-compose)
 
-        I1 --> V1[Volumes]
-        I1 --> P1[Ports]
-        I2 --> D2[DependsOn: db]
-        I2 --> P2[Ports]
-        I3 --> D3[DependsOn: api]
-        I3 --> P3[Ports]
-    end
-
-    subgraph "Resulting Containers"
-        C1[myapp-database]
-        C2[myapp-api]
-        C3[myapp-web]
-    end
-
-    I1 -.->|Creates| C1
-    I2 -.->|Creates| C2
-    I3 -.->|Creates| C3
-
-    C1 --> C2
-    C2 --> C3
-
-    style DD fill:#FF9800
-    style C1 fill:#673AB7
-    style C2 fill:#673AB7
-    style C3 fill:#673AB7
-```
-
-**Use Case**: Complex applications with multiple interdependent services
-
-**Features**:
-- Named container instances
-- Volume mounts (bind, named, tmpfs)
-- Port mappings
-- Dependency ordering
+**Features:**
+- Named instances (not just replicas)
+- Different images per instance
+- Dependency ordering (`dependsOn`)
 - Health checks
+- Restart policies
 - Resource limits
-- Custom commands and entrypoints
 
-**Example**:
+**Example:** Full-stack application with database, API, and frontend
 ```json
 {
   "kind": "DockerDeployment",
@@ -251,7 +242,6 @@ graph TB
     "instances": [
       {
         "name": "database",
-        "type": "container",
         "image": "postgres:15",
         "environment": {
           "POSTGRES_PASSWORD": "secret"
@@ -259,20 +249,33 @@ graph TB
         "volumes": [
           {
             "type": "named",
-            "name": "postgres-data",
+            "name": "db-data",
             "mountPath": "/var/lib/postgresql/data"
           }
         ]
       },
       {
         "name": "api",
-        "type": "container",
         "image": "myapp/api:latest",
         "dependsOn": ["database"],
+        "environment": {
+          "DB_HOST": "database"
+        },
         "ports": [
           {
             "container": 8080,
             "host": 8080
+          }
+        ]
+      },
+      {
+        "name": "web",
+        "image": "myapp/web:latest",
+        "dependsOn": ["api"],
+        "ports": [
+          {
+            "container": 80,
+            "host": 8000
           }
         ]
       }
@@ -280,6 +283,10 @@ graph TB
   }
 }
 ```
+
+**Result:** 3 containers with names `database`, `api`, `web`
+
+**Key Difference:** ExecutorDeployment creates multiple copies of the same container (scaling), while DockerDeployment creates different containers working together (composition).
 
 ## Quick Start
 
@@ -289,20 +296,20 @@ graph TB
 - ColonyOS server running
 - Colony private key
 
-### Run with Docker Compose
+### Option 1: Docker Compose (Recommended)
 
 ```bash
-# 1. Configure environment
+# 1. Set your colony key
 export COLONIES_COLONY_PRVKEY="your-colony-private-key"
 
-# 2. Start the reconciler
+# 2. Start reconciler
 docker-compose up -d
 
-# 3. Check logs
+# 3. Watch logs
 docker-compose logs -f
 ```
 
-### Run Locally
+### Option 2: Build and Run Locally
 
 ```bash
 # 1. Build
@@ -320,62 +327,10 @@ export COLONIES_EXECUTOR_NAME="docker-reconciler-1"
 ./bin/docker-reconciler start --verbose
 ```
 
-## Configuration
-
-### Environment Variables
-
-| Variable | Description | Required | Default |
-|----------|-------------|----------|---------|
-| `COLONIES_SERVER_HOST` | ColonyOS server hostname | Yes | - |
-| `COLONIES_SERVER_PORT` | ColonyOS server port | No | 443 |
-| `COLONIES_INSECURE` | Use insecure HTTP (true/false) | No | false |
-| `COLONIES_COLONY_NAME` | Colony name | Yes | - |
-| `COLONIES_COLONY_PRVKEY` | Colony private key (for self-registration) | Yes* | - |
-| `COLONIES_PRVKEY` | Executor private key (if pre-registered) | Yes* | - |
-| `COLONIES_EXECUTOR_NAME` | Executor name | Yes | - |
-| `COLONIES_EXECUTOR_TYPE` | Executor type | No | deployment-controller |
-| `COLONIES_NODE_NAME` | Node name for registration | No | hostname |
-| `COLONIES_NODE_LOCATION` | Node location | No | default |
-
-\* Either `COLONIES_COLONY_PRVKEY` or `COLONIES_PRVKEY` is required
-
-### Node Metadata
-
-The reconciler automatically detects and registers node metadata:
-
-```mermaid
-graph LR
-    subgraph "Auto-Detection"
-        H[Hostname] --> NM[Node Metadata]
-        OS[OS/Arch] --> NM
-        CPU[CPU Cores] --> NM
-        MEM[Memory] --> NM
-        GPU[GPU Detection] --> NM
-    end
-
-    subgraph "Registration"
-        NM --> ER[Executor<br/>Registration]
-        ER --> NS[Node in<br/>Colonies Server]
-    end
-
-    style NM fill:#4CAF50
-    style NS fill:#2196F3
-```
-
-Detected information:
-- Platform (linux, darwin, windows)
-- Architecture (amd64, arm64)
-- CPU cores
-- Total memory (MB)
-- GPU count and details (NVIDIA via nvidia-smi)
-- Capabilities (docker)
-
-## Usage Examples
-
-### Example 1: Simple Web Server
+### First Deployment
 
 ```bash
-# Create blueprint definition (one-time)
+# 1. Register blueprint type (one-time setup)
 colonies blueprint definition add --spec - <<EOF
 {
   "metadata": {
@@ -396,7 +351,7 @@ colonies blueprint definition add --spec - <<EOF
 }
 EOF
 
-# Deploy nginx with 3 replicas
+# 2. Deploy nginx
 colonies blueprint add --spec - <<EOF
 {
   "kind": "ExecutorDeployment",
@@ -410,19 +365,88 @@ colonies blueprint add --spec - <<EOF
 }
 EOF
 
-# Verify containers
+# 3. Check containers
 docker ps --filter "label=colonies.deployment=nginx"
+
+# You should see 3 nginx containers running
 ```
 
-### Example 2: Scale Deployment
+## Configuration
+
+### Environment Variables
+
+| Variable | Description | Required | Default |
+|----------|-------------|----------|---------|
+| `COLONIES_SERVER_HOST` | ColonyOS server hostname | Yes | - |
+| `COLONIES_SERVER_PORT` | ColonyOS server port | No | 443 |
+| `COLONIES_INSECURE` | Use HTTP instead of HTTPS | No | false |
+| `COLONIES_COLONY_NAME` | Colony name | Yes | - |
+| `COLONIES_COLONY_PRVKEY` | Colony private key (for self-registration) | Yes* | - |
+| `COLONIES_PRVKEY` | Executor private key (if pre-registered) | Yes* | - |
+| `COLONIES_EXECUTOR_NAME` | Name of this executor | Yes | - |
+| `COLONIES_EXECUTOR_TYPE` | Executor type | No | deployment-controller |
+| `COLONIES_NODE_NAME` | Node name for executor registration | No | hostname |
+| `COLONIES_NODE_LOCATION` | Node location/datacenter | No | default |
+
+\* Either `COLONIES_COLONY_PRVKEY` (for self-registration) or `COLONIES_PRVKEY` (for pre-registered executor) is required
+
+### Node Metadata
+
+The reconciler automatically detects system information and registers it with ColonyOS:
+
+**Detected automatically:**
+- Hostname (or use `COLONIES_NODE_NAME`)
+- Platform (linux, darwin, windows)
+- Architecture (amd64, arm64)
+- CPU cores (from `runtime.NumCPU()`)
+- Total memory in MB (from `/proc/meminfo`)
+- GPU count and details (via `nvidia-smi`)
+- Capabilities: `["docker"]`
+
+**Why this matters:** When you deploy executors as containers (ExecutorDeployment with `executorName`), they automatically register with this node information, creating a logical grouping of executors by physical host.
+
+## Usage Examples
+
+### Example 1: Simple Web Server
+
+Deploy a web server with 3 replicas:
 
 ```bash
-# Update replicas from 3 to 5
+colonies blueprint add --spec - <<EOF
+{
+  "kind": "ExecutorDeployment",
+  "metadata": {
+    "name": "web"
+  },
+  "spec": {
+    "image": "nginx:latest",
+    "replicas": 3,
+    "ports": [
+      {
+        "name": "http",
+        "port": 80
+      }
+    ]
+  }
+}
+EOF
+```
+
+**What happens:**
+1. Reconciler pulls `nginx:latest` image
+2. Creates 3 containers: `web-0`, `web-1`, `web-2`
+3. Each listens on port 80
+4. All labeled with `colonies.deployment=web`, `colonies.generation=1`
+
+### Example 2: Scale Up/Down
+
+```bash
+# Scale up to 5 replicas
 colonies blueprint update --spec - <<EOF
 {
   "kind": "ExecutorDeployment",
   "metadata": {
-    "name": "nginx"
+    "name": "web"
   },
   "spec": {
     "image": "nginx:latest",
@@ -431,67 +455,102 @@ colonies blueprint update --spec - <<EOF
 }
 EOF
 
-# Reconciler automatically adds 2 more containers
+# Reconciler automatically:
+# - Keeps web-0, web-1, web-2 running
+# - Starts web-3 and web-4
+# - Updates generation to 2
+
+# Scale down to 2 replicas
+colonies blueprint update --spec - <<EOF
+{
+  "kind": "ExecutorDeployment",
+  "metadata": {
+    "name": "web"
+  },
+  "spec": {
+    "image": "nginx:latest",
+    "replicas": 2
+  }
+}
+EOF
+
+# Reconciler automatically:
+# - Stops and removes web-2, web-3, web-4
+# - Keeps web-0, web-1 running
+# - Updates generation to 3
 ```
 
-### Example 3: Complex Multi-Container App
+### Example 3: Update Configuration
 
 ```bash
-# Deploy a full stack application
+# Change environment variables
+colonies blueprint update --spec - <<EOF
+{
+  "kind": "ExecutorDeployment",
+  "metadata": {
+    "name": "web"
+  },
+  "spec": {
+    "image": "nginx:latest",
+    "replicas": 2,
+    "env": {
+      "ENVIRONMENT": "production",
+      "LOG_LEVEL": "debug"
+    }
+  }
+}
+EOF
+
+# Reconciler automatically:
+# - Detects generation mismatch (old containers have gen 3, blueprint is now gen 4)
+# - Stops web-0 and web-1
+# - Recreates web-0 and web-1 with new environment variables
+# - All containers now have generation 4
+```
+
+**This is the power of generation tracking** - when you update the blueprint, containers are automatically recreated with the new configuration.
+
+### Example 4: Multi-Container Application
+
+```bash
 colonies blueprint add --spec - <<EOF
 {
   "kind": "DockerDeployment",
   "metadata": {
-    "name": "myapp"
+    "name": "blog"
   },
   "spec": {
     "instances": [
       {
-        "name": "database",
+        "name": "db",
         "image": "postgres:15",
         "environment": {
           "POSTGRES_PASSWORD": "secret",
-          "POSTGRES_DB": "myapp"
+          "POSTGRES_DB": "blog"
         },
         "volumes": [
           {
             "type": "named",
-            "name": "postgres-data",
+            "name": "blog-db",
             "mountPath": "/var/lib/postgresql/data"
           }
-        ],
-        "ports": [
-          {
-            "container": 5432,
-            "host": 5432
-          }
         ]
       },
       {
-        "name": "backend",
-        "image": "myapp/backend:latest",
-        "dependsOn": ["database"],
+        "name": "app",
+        "image": "ghost:latest",
+        "dependsOn": ["db"],
         "environment": {
-          "DATABASE_URL": "postgresql://postgres:secret@database:5432/myapp"
+          "database__client": "postgres",
+          "database__connection__host": "db",
+          "database__connection__user": "postgres",
+          "database__connection__password": "secret",
+          "database__connection__database": "blog"
         },
         "ports": [
           {
-            "container": 8080,
+            "container": 2368,
             "host": 8080
-          }
-        ]
-      },
-      {
-        "name": "frontend",
-        "image": "myapp/frontend:latest",
-        "dependsOn": ["backend"],
-        "environment": {
-          "API_URL": "http://backend:8080"
-        },
-        "ports": [
-          {
-            "container": 80,
-            "host": 8000
           }
         ]
       }
@@ -501,129 +560,118 @@ colonies blueprint add --spec - <<EOF
 EOF
 ```
 
-## Container Management
+**What happens:**
+1. Creates `db` container (postgres)
+2. Creates named volume `blog-db` for persistent data
+3. Creates `app` container (Ghost blog)
+4. Containers can reach each other by name (`db` hostname)
+5. Blog accessible at `http://localhost:8080`
 
-### Container Labels
+### Example 5: Deploy ColonyOS Executors
 
-Every managed container is labeled for tracking:
-
-| Label | Description | Example |
-|-------|-------------|---------|
-| `colonies.deployment` | Blueprint name | `nginx` |
-| `colonies.managed` | Managed by ColonyOS | `true` |
-| `colonies.generation` | Blueprint version | `3` |
-
-### Container Naming
-
-**ExecutorDeployment**: `<blueprint-name>-<index>`
-- Example: `nginx-0`, `nginx-1`, `nginx-2`
-
-**DockerDeployment**: `<instance-name>` (from spec)
-- Example: `database`, `backend`, `frontend`
-
-**ExecutorDeployment with executorName**: `<executor-name>-<unique-hash>`
-- Example: `docker-executor-a3f2e`
-- Each container auto-registers as a ColonyOS executor
-
-### Listing Managed Containers
+Deploy 5 docker executors that auto-register with the node:
 
 ```bash
-# All managed containers
-docker ps --filter "label=colonies.managed=true"
-
-# Specific deployment
-docker ps --filter "label=colonies.deployment=nginx"
-
-# Containers by generation
-docker ps --filter "label=colonies.generation=3"
-```
-
-### Manual Cleanup
-
-```bash
-# Remove all managed containers
-docker rm -f $(docker ps -aq --filter "label=colonies.managed=true")
-
-# Remove specific deployment
-docker rm -f $(docker ps -aq --filter "label=colonies.deployment=nginx")
-```
-
-## Node Registration
-
-### Executor Deployment with Node Registration
-
-The reconciler supports deploying ColonyOS executors that auto-register with node metadata:
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant Reconciler
-    participant Docker
-    participant Container as Docker Executor<br/>Container
-    participant Server as ColonyOS Server
-
-    User->>Reconciler: Create ExecutorDeployment<br/>with executorName
-    Reconciler->>Reconciler: Generate unique<br/>executor name
-    Reconciler->>Docker: Create container with<br/>COLONIES_EXECUTOR_NAME<br/>COLONIES_NODE_NAME<br/>COLONIES_NODE_LOCATION
-    Docker->>Container: Start container
-    Container->>Server: Self-register as executor<br/>with node metadata
-    Server->>Server: Create/update node<br/>Add executor to node
-    Container->>Server: Start pulling processes
-```
-
-**Example**:
-```json
+colonies blueprint add --spec - <<EOF
 {
   "kind": "ExecutorDeployment",
   "metadata": {
-    "name": "docker-executors"
+    "name": "docker-pool"
   },
   "spec": {
     "image": "colonyos/dockerexecutor:latest",
     "replicas": 5,
-    "executorName": "docker-executor",
+    "executorName": "docker-exec",
     "env": {
-      "COLONIES_COLONY_PRVKEY": "colony-private-key"
+      "COLONIES_COLONY_PRVKEY": "your-colony-key"
     }
   }
 }
+EOF
 ```
 
-This creates 5 executors:
-- `docker-executor-a3f2e`
-- `docker-executor-b7k9m`
-- `docker-executor-c2p1x`
-- etc.
+**What happens:**
+1. Reconciler generates 5 unique names: `docker-exec-a3f2e`, `docker-exec-b7k9m`, etc.
+2. Creates 5 containers with unique executor names
+3. Passes `COLONIES_NODE_NAME` and `COLONIES_NODE_LOCATION` to containers
+4. Each container self-registers as an executor
+5. All executors appear under the same node in ColonyOS
 
-Each automatically registers with the node where the reconciler is running.
+This is powerful for creating executor pools on specific hardware (e.g., GPU nodes).
 
-### Network Configuration
+## Container Management
 
-Containers are attached to the `colonies_default` network with aliases:
+### Container Labels
 
-```mermaid
-graph TB
-    subgraph "colonies_default Network"
-        C1[Container:<br/>nginx-0]
-        C2[Container:<br/>nginx-1]
-        C3[Container:<br/>nginx-2]
+Every managed container has these Docker labels:
 
-        A1[Alias: nginx]
-    end
+| Label | Value | Purpose |
+|-------|-------|---------|
+| `colonies.deployment` | Blueprint name | Find all containers for a deployment |
+| `colonies.managed` | `true` | Identify ColonyOS-managed containers |
+| `colonies.generation` | Generation number | Track blueprint version |
 
-    A1 -.->|Load balanced| C1
-    A1 -.->|Load balanced| C2
-    A1 -.->|Load balanced| C3
+**Example:**
+```bash
+# Find all containers for "web" deployment
+docker ps --filter "label=colonies.deployment=web"
 
-    External[External Client] -->|nginx:80| A1
+# Find all managed containers
+docker ps --filter "label=colonies.managed=true"
 
-    style A1 fill:#FF9800
-    style C1 fill:#2196F3
-    style C2 fill:#2196F3
-    style C3 fill:#2196F3
+# Find containers with specific generation
+docker inspect web-0 | grep colonies.generation
 ```
 
-All containers from the same deployment share a network alias (blueprint name), enabling service discovery.
+### Container Naming
+
+**ExecutorDeployment without executorName:**
+- Pattern: `<blueprint-name>-<index>`
+- Example: `web-0`, `web-1`, `web-2`
+
+**ExecutorDeployment with executorName:**
+- Pattern: `<executor-name>-<unique-hash>`
+- Example: `docker-exec-a3f2e`, `docker-exec-b7k9m`
+- Hash ensures uniqueness across colony
+
+**DockerDeployment:**
+- Pattern: Instance name from spec
+- Example: `database`, `api`, `web` (exactly as specified)
+
+### Network Aliases
+
+All containers from the same deployment share a network alias (the blueprint name). This enables service discovery:
+
+```bash
+# Deployment named "api" with 3 replicas
+# Containers: api-0, api-1, api-2
+# All respond to hostname "api"
+
+# From another container:
+curl http://api:8080
+# Docker load-balances between api-0, api-1, api-2
+```
+
+### Manual Operations
+
+```bash
+# View container details
+docker ps --filter "label=colonies.deployment=web"
+
+# View logs
+docker logs web-0
+
+# Execute command in container
+docker exec -it web-0 /bin/bash
+
+# Clean up all managed containers
+docker rm -f $(docker ps -aq --filter "label=colonies.managed=true")
+
+# Clean up specific deployment
+docker rm -f $(docker ps -aq --filter "label=colonies.deployment=web")
+```
+
+**Important:** If you manually remove containers, they won't restart automatically. The reconciler only acts when blueprints are created/updated. To trigger reconciliation, update the blueprint (even with no changes).
 
 ## Development
 
@@ -634,22 +682,20 @@ docker-reconciler/
 ├── cmd/
 │   └── main.go              # Entry point
 ├── pkg/
-│   ├── executor/            # Executor logic & process handling
-│   │   └── executor.go      # - Process assignment
-│   │                        # - Reconciliation orchestration
-│   │                        # - Node metadata detection
-│   ├── reconciler/          # Core reconciliation engine
-│   │   └── reconciler.go    # - State comparison
-│   │                        # - Container lifecycle
-│   │                        # - Docker API interaction
-│   └── build/               # Build info
+│   ├── executor/            # Process assignment & orchestration
+│   │   └── executor.go      # - Handles reconciliation processes
+│   │                        # - Detects node metadata
+│   │                        # - Manages blueprint tracking
+│   ├── reconciler/          # Core reconciliation logic
+│   │   └── reconciler.go    # - Compares actual vs desired state
+│   │                        # - Manages container lifecycle
+│   │                        # - Interacts with Docker API
+│   └── build/               # Build version info
 ├── internal/
 │   └── cli/                 # CLI commands
-│       ├── root.go
-│       └── start.go
 ├── examples/                # Example blueprints
 ├── docker-compose.yml       # Docker Compose setup
-├── Dockerfile               # Container build
+├── Dockerfile               # Container image
 ├── Makefile                 # Build automation
 └── README.md                # This file
 ```
@@ -660,99 +706,84 @@ docker-reconciler/
 # Build binary
 make build
 
-# Build Docker image
+# Build Docker container
 make container
 
-# Run tests
-make test
-
-# Install to /usr/local/bin
+# Install to system
 sudo make install
+
+# Clean build artifacts
+make clean
 ```
 
-### Reconciliation Flow in Code
+### Key Functions
 
-```mermaid
-flowchart TD
-    A[Executor.ServeForEver] --> B[Assign Process]
-    B --> C{Function Name?}
-    C -->|reconcile| D[handleReconcile]
-    C -->|other| E[Fail Process]
+**executor/executor.go:**
+- `ServeForEver()`: Main loop - assigns processes from ColonyOS
+- `handleReconcile()`: Processes reconciliation requests
+- `detectNodeMetadata()`: Auto-detects system information
+- `detectGPUs()`: Detects NVIDIA GPUs via nvidia-smi
 
-    D --> F{Action Type?}
-    F -->|create/update| G[reconciler.Reconcile]
-    F -->|delete| G
-
-    G --> H{Blueprint Kind?}
-    H -->|ExecutorDeployment| I[reconcileExecutorDeployment]
-    H -->|DockerDeployment| J[reconcileDockerDeployment]
-
-    I --> K[List Containers]
-    J --> K
-
-    K --> L[Find Dirty Containers<br/>generation mismatch]
-    L --> M{Dirty?}
-    M -->|Yes| N[Recreate Containers]
-    M -->|No| O[Check Replica Count]
-
-    N --> O
-    O --> P{Scale?}
-    P -->|Up| Q[Start New Containers]
-    P -->|Down| R[Stop Excess Containers]
-    P -->|Match| S[No Action]
-
-    Q --> T[Collect Status]
-    R --> T
-    S --> T
-
-    T --> U[Report to Server]
-    U --> V[Close Process]
-
-    style G fill:#4CAF50
-    style I fill:#2196F3
-    style J fill:#FF9800
-    style T fill:#9C27B0
-```
+**reconciler/reconciler.go:**
+- `Reconcile()`: Routes to ExecutorDeployment or DockerDeployment handler
+- `reconcileExecutorDeployment()`: Handles replica-based deployments
+- `reconcileDockerDeployment()`: Handles multi-container deployments
+- `findDirtyContainers()`: Identifies containers with outdated generation
+- `startContainer()`: Creates and starts a container
+- `stopAndRemoveContainer()`: Cleanup
 
 ## Troubleshooting
 
-### Reconciler Not Starting
+### Reconciler Won't Start
 
-**Check logs**:
+**Symptoms:**
+- Container exits immediately
+- Logs show connection errors
+
+**Check:**
 ```bash
+# View logs
 docker-compose logs
+
+# Common issues:
+# 1. Missing COLONIES_COLONY_PRVKEY
+# 2. Cannot connect to ColonyOS server
+# 3. Docker socket not accessible
 ```
 
-**Common Issues**:
-- Missing `COLONIES_COLONY_PRVKEY` environment variable
-- Cannot reach ColonyOS server
-- Docker daemon not accessible
-
-**Solution**:
+**Solution:**
 ```bash
-# Verify Docker socket
-ls -l /var/run/docker.sock
+# Verify environment
+docker-compose config
 
-# Test connection
+# Test Docker access
 docker ps
 
-# Check environment
-docker-compose config
+# Test ColonyOS connection
+curl http://localhost:50080/api/v1/info
 ```
 
-### Containers Not Being Created
+### Containers Not Created
 
-**Check reconciler logs**:
+**Symptoms:**
+- Blueprint created but no containers appear
+- Reconciliation process fails
+
+**Check:**
 ```bash
-docker-compose logs -f | grep -i error
+# View reconciler logs
+docker-compose logs -f
+
+# Check process logs in ColonyOS
+colonies process get --processid <id>
+
+# Common issues:
+# 1. Image not found
+# 2. Docker socket permissions
+# 3. Insufficient disk space
 ```
 
-**Common Issues**:
-- Image not found or pull failed
-- Insufficient resources
-- Docker socket permissions
-
-**Solution**:
+**Solution:**
 ```bash
 # Pull image manually
 docker pull nginx:latest
@@ -760,57 +791,64 @@ docker pull nginx:latest
 # Check disk space
 df -h
 
-# Check Docker socket permissions
+# Verify Docker socket
 ls -l /var/run/docker.sock
 ```
 
 ### Containers Not Updating
 
-**Verify generation**:
-```bash
-# Check container generation
-docker inspect <container-name> | grep colonies.generation
+**Symptoms:**
+- Updated blueprint but containers still have old configuration
+- Environment variables not changing
 
-# Check blueprint generation
-colonies blueprint get --name <blueprint-name>
+**Check:**
+```bash
+# Verify generation labels
+docker inspect web-0 | grep colonies.generation
+
+# Get blueprint generation
+colonies blueprint get --name web
 ```
 
-**Common Issues**:
-- Generation label missing (old containers)
-- Reconciliation process failed
+**Why this happens:** Containers are only recreated when generation changes. If the process failed, containers may be out of sync.
 
-**Solution**:
+**Solution:**
 ```bash
 # Force recreation by removing containers
-docker rm -f $(docker ps -aq --filter "label=colonies.deployment=<name>")
+docker rm -f $(docker ps -aq --filter "label=colonies.deployment=web")
 
-# Trigger reconciliation
-colonies blueprint update --spec <spec-file>
+# Update blueprint (triggers reconciliation)
+colonies blueprint update --spec deployment.json
 ```
 
-### Connection Issues on Mac/Windows
+### Connection Issues (Mac/Windows)
 
-**Problem**: Cannot connect to ColonyOS on localhost
+**Problem:** Reconciler can't connect to ColonyOS on `localhost`
 
-**Solution**: Use `host.docker.internal`
+**Why:** On Mac/Windows, Docker Desktop runs in a VM. Containers can't reach host's localhost.
+
+**Solution:**
 ```bash
-# In .env or docker-compose.yml
-COLONIES_SERVER_HOST=host.docker.internal
+# Use special hostname
+export COLONIES_SERVER_HOST=host.docker.internal
+
+# Or in docker-compose.yml:
+environment:
+  COLONIES_SERVER_HOST: host.docker.internal
 ```
 
 ### GPU Detection Not Working
 
-**Check nvidia-smi**:
-```bash
-# Inside container
-docker exec <reconciler-container> nvidia-smi
-```
+**Problem:** `GPU: 0` even though you have GPUs
 
-**Solution**:
-```yaml
-# In docker-compose.yml, add GPU support
+**Solution:**
+```bash
+# Install nvidia-docker2 on host
+sudo apt-get install nvidia-docker2
+
+# Add GPU support to docker-compose.yml:
 services:
-  deployment-controller:
+  docker-reconciler:
     deploy:
       resources:
         reservations:
@@ -822,24 +860,33 @@ services:
 
 ## Advanced Topics
 
-### Custom Network Configuration
+### Privileged Containers
 
-Override default network in docker-compose.yml:
+Some containers need elevated privileges (e.g., Docker-in-Docker):
 
-```yaml
-networks:
-  colonies_default:
-    external: true
-    name: my-custom-network
+```json
+{
+  "kind": "ExecutorDeployment",
+  "spec": {
+    "image": "docker:dind",
+    "privileged": true,
+    "volumes": [
+      {
+        "host": "/var/run/docker.sock",
+        "container": "/var/run/docker.sock"
+      }
+    ]
+  }
+}
 ```
 
 ### Resource Limits
 
-For DockerDeployment, specify resource limits:
+For DockerDeployment, specify CPU and memory limits:
 
 ```json
 {
-  "name": "heavy-worker",
+  "name": "worker",
   "image": "myapp/worker:latest",
   "resources": {
     "cpus": "2.0",
@@ -848,47 +895,48 @@ For DockerDeployment, specify resource limits:
 }
 ```
 
-### Health Checks
+### Custom Commands
 
-Add health checks to DockerDeployment instances:
-
-```json
-{
-  "name": "api",
-  "image": "myapp/api:latest",
-  "healthcheck": {
-    "test": "curl -f http://localhost:8080/health || exit 1",
-    "interval": "30s",
-    "timeout": "10s",
-    "retries": 3,
-    "startPeriod": "40s"
-  }
-}
-```
-
-### Privileged Containers
-
-For containers requiring elevated privileges:
+Override container command/entrypoint:
 
 ```json
 {
   "kind": "ExecutorDeployment",
   "spec": {
-    "image": "docker:dind",
-    "privileged": true
+    "image": "ubuntu:latest",
+    "command": ["/bin/bash"],
+    "args": ["-c", "sleep infinity"]
   }
 }
 ```
 
 ## Security Considerations
 
-**Important Security Notes**:
+**Important Security Notes:**
 
-1. **Docker Socket Access**: The reconciler requires access to `/var/run/docker.sock`, which grants significant privileges
-2. **Privileged Containers**: Use `privileged: true` only when absolutely necessary
-3. **Network Isolation**: Consider using custom networks for isolation
-4. **Secrets Management**: Never store secrets in blueprint specs; use environment variables or secret management systems
-5. **TLS**: Always use TLS in production (`COLONIES_INSECURE=false`)
+1. **Docker Socket Access**: The reconciler mounts `/var/run/docker.sock` to manage containers. This grants significant privileges - essentially root access to the host. Only run in trusted environments.
+
+2. **Privileged Containers**: Use `privileged: true` only when absolutely necessary. These containers can modify the host system.
+
+3. **Secrets Management**: Never put passwords or API keys in blueprint specs. Use environment variables or proper secret management:
+   ```bash
+   # Bad: Secrets in blueprint
+   "env": {
+     "DB_PASSWORD": "mysecret123"
+   }
+
+   # Good: Reference from environment
+   export DB_PASSWORD="mysecret123"
+   # Pass via reconciler environment, not blueprint
+   ```
+
+4. **TLS in Production**: Always use TLS:
+   ```bash
+   COLONIES_INSECURE=false  # Use HTTPS
+   COLONIES_SERVER_PORT=443
+   ```
+
+5. **Network Isolation**: Consider using custom Docker networks to isolate deployments from each other.
 
 ## License
 
@@ -899,12 +947,12 @@ See main ColonyOS repository for license information.
 This executor is part of the ColonyOS ecosystem. Contributions welcome!
 
 1. Follow ColonyOS contribution guidelines
-2. Test locally before submitting
-3. Update documentation as needed
-4. Add tests for new features
+2. Test locally before submitting PRs
+3. Update documentation for new features
+4. Add examples for complex features
 
 ## Support
 
 - **Documentation**: This README
 - **Issues**: [ColonyOS GitHub Issues](https://github.com/colonyos/colonies/issues)
-- **Community**: ColonyOS community channels
+- **Examples**: See `examples/` directory
