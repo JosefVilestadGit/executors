@@ -1,13 +1,13 @@
 {
   "kind": "ExecutorDeployment",
   "metadata": {
-    "name": "docker-executor"
+    "name": "docker-executor-any"
   },
   "spec": {
-    "image": "colonyos/dockerexecutor:v1.0.5",
+    "image": "colonyos/dockerexecutor:v1.0.7",
     "replicas": 3,
-    "executorType": "docker-executor-reconciler",
-    "executorName": "docker-executor",
+    "executorType": "docker-reconciler",
+    "comment": "No executorName specified - any docker-reconciler can handle this deployment",
     "env": {
       "LANG": "en_US.UTF-8",
       "LANGUAGE": "en_US.UTF-8",

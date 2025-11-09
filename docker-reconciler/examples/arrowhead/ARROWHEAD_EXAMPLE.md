@@ -1,6 +1,6 @@
 # Arrowhead Cloud as ColonyOS Service
 
-This example demonstrates how to deploy an Eclipse Arrowhead Framework cloud as a ColonyOS managed service using the docker-reconciler.
+This example demonstrates how to deploy an Eclipse Arrowhead Framework cloud as a ColonyOS managed blueprint using the docker-reconciler.
 
 ## Overview
 
@@ -17,7 +17,7 @@ The Arrowhead Framework is an IoT platform that provides service-oriented archit
 
 ## Service Definition
 
-The `arrowhead-cloud-definition.json` defines a new service kind called `ArrowheadCloud` with JSON schema validation for:
+The `arrowhead-cloud-definition.json` defines a new blueprint kind called `ArrowheadCloud` with JSON schema validation for:
 
 - Cloud naming and identification
 - Database configuration (image, ports, volumes)
@@ -27,7 +27,7 @@ The `arrowhead-cloud-definition.json` defines a new service kind called `Arrowhe
 
 ## Example Service Instance
 
-The `arrowhead-cloud-c1.json` creates a service instance named "c1-cloud" with:
+The `arrowhead-cloud-c1.json` creates a blueprint instance named "c1-cloud" with:
 
 - Database on port 3306
 - All 6 core systems enabled with standard ports
@@ -36,7 +36,7 @@ The `arrowhead-cloud-c1.json` creates a service instance named "c1-cloud" with:
 
 ## How the Docker Reconciler Handles This
 
-When you create or update this service, the docker-reconciler will:
+When you create or update this blueprint, the docker-reconciler will:
 
 1. **Parse the spec** and validate it against the ArrowheadCloud schema
 2. **Create a Docker network** (arrowhead-c1) for inter-container communication
@@ -54,17 +54,17 @@ When you create or update this service, the docker-reconciler will:
    - Configure port mappings
    - Connect to the custom network
 
-5. **Monitor container status** and report back in the service status field
+5. **Monitor container status** and report back in the blueprint status field
 
 6. **Handle updates**: If you change the spec (e.g., disable eventhandler), the reconciler will:
    - Detect the difference
    - Remove the eventhandler container
    - Keep other containers running
-   - Update the service status
+   - Update the blueprint status
 
 ## Prerequisites
 
-Before deploying this service, you need to:
+Before deploying this blueprint, you need to:
 
 1. **Generate certificates** for all core systems using the scripts in arrowhead-core-docker
 2. **Create .env file** with PASSWORD set
@@ -78,24 +78,24 @@ Before deploying this service, you need to:
 
 ## Deployment Steps
 
-1. **Add the ServiceDefinition** (colony owner only):
+1. **Add the BlueprintDefinition** (colony owner only):
 ```bash
-colonies service definition add --spec arrowhead-cloud-definition.json
+colonies blueprint definition add --spec arrowhead-cloud-definition.json
 ```
 
-2. **Create the service instance**:
+2. **Create the blueprint instance**:
 ```bash
-colonies service add --spec arrowhead-cloud-c1.json
+colonies blueprint add --spec arrowhead-cloud-c1.json
 ```
 
-3. **Check service status**:
+3. **Check blueprint status**:
 ```bash
-colonies service get --name c1-cloud
+colonies blueprint get --name c1-cloud
 ```
 
 4. **View deployment details**:
 ```bash
-colonies service get --name c1-cloud
+colonies blueprint get --name c1-cloud
 ```
 
 The status will show:
@@ -110,13 +110,13 @@ To scale or reconfigure:
 ```bash
 # Edit the JSON file (e.g., disable eventhandler)
 # Then update:
-colonies service update --spec arrowhead-cloud-c1.json
+colonies blueprint update --spec arrowhead-cloud-c1.json
 ```
 
 Or use the set command to change a single field:
 
 ```bash
-colonies service set --name c1-cloud --key systems.eventhandler.enabled --value false
+colonies blueprint set --name c1-cloud --key systems.eventhandler.enabled --value false
 ```
 
 ## Service History
@@ -124,7 +124,7 @@ colonies service set --name c1-cloud --key systems.eventhandler.enabled --value 
 Track all changes to your Arrowhead cloud:
 
 ```bash
-colonies service history --name c1-cloud
+colonies blueprint history --name c1-cloud
 ```
 
 This shows who made changes (user or reconciler) and when, with generation numbers incrementing for each spec change.
@@ -133,7 +133,7 @@ This shows who made changes (user or reconciler) and when, with generation numbe
 
 ### Container Type Mapping
 
-The docker-reconciler would need to be enhanced to handle this multi-container service pattern. Currently it expects a single `instance` array with `type: "container"`. For Arrowhead, you could either:
+The docker-reconciler would need to be enhanced to handle this multi-container blueprint pattern. Currently it expects a single `instance` array with `type: "container"`. For Arrowhead, you could either:
 
 1. **Option A**: Keep current structure, list all 7 containers explicitly in the spec:
 ```json
@@ -177,7 +177,7 @@ The reconciler should:
 - Start database first, wait for healthy status
 - Only then start core systems
 - Use Docker healthchecks or wait-for-it scripts
-- Handle cascade deletion (remove all containers when service is deleted)
+- Handle cascade deletion (remove all containers when blueprint is deleted)
 
 ### Volume Management
 
@@ -188,4 +188,4 @@ Named volumes vs bind mounts:
 
 ### Network Isolation
 
-Create a dedicated Docker network per service instance to isolate different Arrowhead clouds from each other while allowing inter-container communication within a cloud.
+Create a dedicated Docker network per blueprint instance to isolate different Arrowhead clouds from each other while allowing inter-container communication within a cloud.

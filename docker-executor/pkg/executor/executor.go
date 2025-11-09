@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"syscall"
 	"time"
@@ -277,6 +278,30 @@ func (e *Executor) createColoniesExecutorWithKey(colonyName string) (*core.Execu
 	executor.Location.Description = e.locDesc
 	executor.Location.Long = e.long
 	executor.Location.Lat = e.lat
+
+	log.Info("Checking for node metadata environment variables...")
+	// Check for node metadata from environment variables (for backward compatibility with node registration)
+	nodeName := os.Getenv("COLONIES_NODE_NAME")
+	location := os.Getenv("COLONIES_NODE_LOCATION")
+
+	if nodeName != "" && location != "" {
+		// If node metadata is present, add it to the executor for auto-registration
+		executor.NodeMetadata = &core.NodeMetadata{
+			Hostname:     nodeName,
+			Location:     location,
+			Platform:     runtime.GOOS,
+			Architecture: runtime.GOARCH,
+			CPU:          runtime.NumCPU(),
+			Capabilities: []string{"docker"},
+		}
+		log.WithFields(log.Fields{
+			"NodeName":     nodeName,
+			"NodeLocation": location,
+			"Platform":     runtime.GOOS,
+			"Architecture": runtime.GOARCH,
+			"CPUCores":     runtime.NumCPU(),
+		}).Info("Detected node metadata from environment, will register under node")
+	}
 
 	return executor, executorID, executorPrvKey, nil
 }

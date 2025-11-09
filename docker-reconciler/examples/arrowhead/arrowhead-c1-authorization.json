@@ -1,9 +1,9 @@
 {
   "metadata": {
-    "name": "c1-gateway",
+    "name": "c1-authorization",
     "labels": {
       "cloud": "c1",
-      "component": "gateway",
+      "component": "authorization",
       "arrowhead": "true"
     }
   },
@@ -11,42 +11,43 @@
   "spec": {
     "instances": [
       {
-        "name": "c1-gateway",
+        "name": "c1-authorization",
         "type": "container",
         "image": "aitiaiiot/arrowhead-system:4.6.1",
         "environment": {
-          "SYSTEM_NAME": "gateway",
+          "SYSTEM_NAME": "authorization",
           "TZ": "Europe/Amsterdam",
           "PASSWORD": "123456"
         },
         "ports": [
           {
-            "container": 8453,
+            "host": 8445,
+            "container": 8445,
             "protocol": "tcp"
           }
         ],
         "volumes": [
           {
             "type": "bind",
-            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1-props/gateway/application.properties",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1-props/authorization/application.properties",
             "mountPath": "/opt/arrowhead/application.properties",
             "readOnly": true
           },
           {
             "type": "bind",
-            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1/gateway/certificates",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1/authorization/certificates",
             "mountPath": "/opt/arrowhead/certificates",
             "readOnly": true
           },
           {
             "type": "bind",
-            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/gateway/log4j2.xml",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/authorization/log4j2.xml",
             "mountPath": "/opt/arrowhead/log4j2.xml",
             "readOnly": true
           },
           {
             "type": "bind",
-            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/gateway/run.sh",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/authorization/run.sh",
             "mountPath": "/opt/arrowhead/run.sh",
             "readOnly": true
           }

@@ -298,15 +298,52 @@ The reconciler supports two types of blueprints:
 
 ### Option 1: Docker Compose (Recommended)
 
-```bash
-# 1. Set your colony key
-export COLONIES_COLONY_PRVKEY="your-colony-private-key"
+This docker-compose provides a **second reconciler node** (edge) for testing multi-node deployments. The first node (node1) is already included in the main colonies docker-compose.
 
-# 2. Start reconciler
-docker-compose up -d
+```bash
+# 1. Make sure colonies docker-compose is running (includes node1)
+cd /path/to/colonies
+source docker-compose.env && docker-compose up -d
+
+# 2. Start second reconciler node (edge)
+cd /path/to/executors/docker-reconciler
+source docker-compose.env && docker-compose up -d
 
 # 3. Watch logs
 docker-compose logs -f
+
+# 4. Verify both nodes are registered
+colonies node ls
+```
+
+**Node Configuration:**
+- **node1**: In colonies docker-compose (datacenter-1)
+- **edge**: In this docker-compose (datacenter-edge)
+
+Both nodes share the same Docker socket, so containers managed by either node will be visible to both.
+
+**Network Configuration:**
+The `docker-compose.env` uses `COLONIES_SERVER_HOST="colonies-server"` which is the service name from the colonies docker-compose. This works because both compose files use the same `colonies_default` network.
+
+**Important:** Don't use `localhost` - inside a container, `localhost` refers to the container itself, not the host machine.
+
+Alternative connection options:
+```bash
+# Option 1: Use service name (default, works with colonies docker-compose)
+export COLONIES_SERVER_HOST="colonies-server"
+
+# Option 2: Use host.docker.internal (Docker Desktop on Mac/Windows)
+export COLONIES_SERVER_HOST="host.docker.internal"
+
+# Option 3: Use host IP (Linux or custom setup)
+export COLONIES_SERVER_HOST="192.168.1.100"
+```
+
+Customize node name and location:
+```bash
+# docker-compose.env
+export COLONIES_NODE_NAME="my-edge-node"
+export COLONIES_NODE_LOCATION="aws-us-west-2"
 ```
 
 ### Option 2: Build and Run Locally

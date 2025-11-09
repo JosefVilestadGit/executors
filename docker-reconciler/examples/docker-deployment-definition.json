@@ -3,7 +3,7 @@
     "name": "docker-deployment"
   },
   "spec": {
-    "group": "docker.colonyos.io",
+    "group": "colonyos.io",
     "version": "v1",
     "names": {
       "kind": "DockerDeployment",
@@ -15,24 +15,6 @@
       "type": "object",
       "required": ["instances"],
       "properties": {
-        "network": {
-          "type": "object",
-          "properties": {
-            "name": {
-              "type": "string",
-              "description": "Docker network name"
-            },
-            "create": {
-              "type": "boolean",
-              "description": "Whether to create the network if it doesn't exist"
-            },
-            "driver": {
-              "type": "string",
-              "description": "Network driver (bridge, overlay, etc.)",
-              "default": "bridge"
-            }
-          }
-        },
         "instances": {
           "type": "array",
           "description": "List of container instances to deploy",
@@ -42,7 +24,7 @@
             "properties": {
               "name": {
                 "type": "string",
-                "description": "Container name"
+                "description": "Name of the container instance"
               },
               "type": {
                 "type": "string",
@@ -51,47 +33,34 @@
               },
               "image": {
                 "type": "string",
-                "description": "Docker image name with optional tag"
-              },
-              "command": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Override container command"
-              },
-              "args": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Arguments to the container command"
+                "description": "Docker image to use (e.g., 'nginx:latest')"
               },
               "environment": {
                 "type": "object",
-                "additionalProperties": {"type": "string"},
-                "description": "Environment variables as key-value pairs"
-              },
-              "envFile": {
-                "type": "string",
-                "description": "Path to .env file on host"
+                "description": "Environment variables for the container",
+                "additionalProperties": {
+                  "type": "string"
+                }
               },
               "ports": {
                 "type": "array",
                 "description": "Port mappings",
                 "items": {
                   "type": "object",
-                  "required": ["container"],
+                  "required": ["container", "protocol"],
                   "properties": {
+                    "host": {
+                      "type": "integer",
+                      "description": "Host port (optional, will auto-assign if not specified)"
+                    },
                     "container": {
                       "type": "integer",
                       "description": "Container port"
                     },
-                    "host": {
-                      "type": "integer",
-                      "description": "Host port (optional, defaults to same as container)"
-                    },
                     "protocol": {
                       "type": "string",
                       "enum": ["tcp", "udp"],
-                      "default": "tcp",
-                      "description": "Protocol"
+                      "description": "Protocol (tcp or udp)"
                     }
                   }
                 }
@@ -105,100 +74,47 @@
                   "properties": {
                     "type": {
                       "type": "string",
-                      "enum": ["bind", "named", "tmpfs"],
-                      "description": "Volume type"
-                    },
-                    "hostPath": {
-                      "type": "string",
-                      "description": "Host path for bind mounts"
+                      "enum": ["named", "bind"],
+                      "description": "Volume type: 'named' for Docker volumes, 'bind' for host paths"
                     },
                     "name": {
                       "type": "string",
-                      "description": "Volume name for named volumes"
+                      "description": "Volume name (for named volumes) or host path (for bind mounts)"
                     },
                     "mountPath": {
                       "type": "string",
-                      "description": "Mount path inside container"
+                      "description": "Container mount path"
                     },
                     "readOnly": {
                       "type": "boolean",
-                      "default": false,
-                      "description": "Mount as read-only"
+                      "description": "Mount as read-only",
+                      "default": false
                     }
                   }
                 }
               },
-              "dependsOn": {
+              "command": {
                 "type": "array",
-                "items": {"type": "string"},
-                "description": "List of container names this container depends on"
-              },
-              "restartPolicy": {
-                "type": "string",
-                "enum": ["no", "always", "on-failure", "unless-stopped"],
-                "default": "unless-stopped",
-                "description": "Container restart policy"
-              },
-              "healthcheck": {
-                "type": "object",
-                "properties": {
-                  "test": {
-                    "type": "string",
-                    "description": "Healthcheck command"
-                  },
-                  "interval": {
-                    "type": "string",
-                    "description": "Time between checks (e.g., '30s')"
-                  },
-                  "timeout": {
-                    "type": "string",
-                    "description": "Timeout for each check (e.g., '10s')"
-                  },
-                  "retries": {
-                    "type": "integer",
-                    "description": "Number of retries before marking unhealthy"
-                  },
-                  "startPeriod": {
-                    "type": "string",
-                    "description": "Grace period before starting checks (e.g., '40s')"
-                  }
+                "description": "Override container command",
+                "items": {
+                  "type": "string"
                 }
               },
-              "resources": {
-                "type": "object",
-                "description": "Resource limits and reservations",
-                "properties": {
-                  "cpus": {
-                    "type": "string",
-                    "description": "CPU limit (e.g., '0.5', '2')"
-                  },
-                  "memory": {
-                    "type": "string",
-                    "description": "Memory limit (e.g., '512M', '2G')"
-                  }
+              "args": {
+                "type": "array",
+                "description": "Override container arguments",
+                "items": {
+                  "type": "string"
                 }
-              },
-              "labels": {
-                "type": "object",
-                "additionalProperties": {"type": "string"},
-                "description": "Container labels"
               },
               "privileged": {
                 "type": "boolean",
-                "default": false,
-                "description": "Run container in privileged mode"
+                "description": "Run container in privileged mode",
+                "default": false
               },
-              "user": {
+              "networkMode": {
                 "type": "string",
-                "description": "User to run as (e.g., '1000:1000')"
-              },
-              "workingDir": {
-                "type": "string",
-                "description": "Working directory inside container"
-              },
-              "hostname": {
-                "type": "string",
-                "description": "Container hostname"
+                "description": "Docker network mode (e.g., 'bridge', 'host', 'none')"
               }
             }
           }

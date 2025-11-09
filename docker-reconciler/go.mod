@@ -1,20 +1,21 @@
 module github.com/colonyos/executors/docker-reconciler
 
-go 1.25
+go 1.24.0
 
-toolchain go1.25.4
+toolchain go1.24.10
 
 require (
 	github.com/colonyos/colonies v1.9.0
 	github.com/colonyos/executors/common v0.0.4
 	github.com/docker/docker v25.0.3+incompatible
+	github.com/docker/go-connections v0.5.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.8.0
 )
 
 replace github.com/colonyos/executors/common v0.0.4 => ../common/
 
-replace github.com/colonyos/colonies v1.9.0 => /home/johan/dev/github/colonyos/colonies/
+replace github.com/colonyos/colonies v1.9.0 => ../../colonies/
 
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 // indirect
@@ -33,7 +34,6 @@ require (
 	github.com/davidlazar/go-crypto v0.0.0-20200604182044-b73af7476f6c // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/distribution/reference v0.5.0 // indirect
-	github.com/docker/go-connections v0.5.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dsnet/golib/memfile v1.0.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect

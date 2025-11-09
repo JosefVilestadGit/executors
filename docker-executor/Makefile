@@ -1,8 +1,8 @@
 all: build
 .PHONY: all build container push clean buildx-setup multiplatform multiplatform-push
 
-BUILD_IMAGE ?= colonyos/docker-reconciler
-PUSH_IMAGE ?= colonyos/docker-reconciler:v1.0.2
+BUILD_IMAGE ?= colonyos/dockerexecutor
+PUSH_IMAGE ?= colonyos/dockerexecutor:v1.0.7
 PLATFORMS ?= linux/amd64,linux/arm64
 
 VERSION := $(shell git rev-parse --short HEAD)
@@ -13,11 +13,11 @@ GOLDFLAGS += -X 'main.BuildTime=$(BUILDTIME)'
 
 build:
 	@mkdir -p ./bin
-	@CGO_ENABLED=0 go build -ldflags="-s -w $(GOLDFLAGS)" -o ./bin/docker-reconciler ./cmd/main.go
+	@CGO_ENABLED=0 go build -ldflags="-s -w $(GOLDFLAGS)" -o ./bin/docker_executor ./cmd/main.go
 
 # Build from repository root (two levels up) to include executors/ and colonies/
 container:
-	cd ../.. && docker build -f executors/docker-reconciler/Dockerfile \
+	cd ../.. && docker build -f executors/docker/Dockerfile \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg BUILDTIME=$(BUILDTIME) \
 		-t $(BUILD_IMAGE) \
@@ -33,18 +33,18 @@ buildx-setup:
 	@docker buildx inspect --bootstrap
 
 # Build multiplatform images (local only, not pushed)
-# Note: --load only works with single platform, so we build for current platform
 multiplatform: buildx-setup
-	cd ../.. && docker buildx build -f executors/docker-reconciler/Dockerfile \
+	cd ../.. && docker buildx build -f executors/docker/Dockerfile \
 		--platform $(PLATFORMS) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg BUILDTIME=$(BUILDTIME) \
 		-t $(BUILD_IMAGE) \
+		--load \
 		.
 
 # Build and push multiplatform images to registry
 multiplatform-push: buildx-setup
-	cd ../.. && docker buildx build -f executors/docker-reconciler/Dockerfile \
+	cd ../.. && docker buildx build -f executors/docker/Dockerfile \
 		--platform $(PLATFORMS) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg BUILDTIME=$(BUILDTIME) \

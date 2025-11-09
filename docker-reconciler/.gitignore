@@ -18,8 +18,8 @@ vendor/
 # Go workspace file
 go.work
 
-# Environment files (contains secrets)
+# Environment files (local overrides)
 .env
 
-# Keep .env.example
-!.env.example
+# docker-compose.env is tracked (contains dev/example config)
+# For production, create a separate file or use .env for overrides

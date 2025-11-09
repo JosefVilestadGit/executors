@@ -1,9 +1,9 @@
 {
   "metadata": {
-    "name": "c1-orchestrator",
+    "name": "c1-gatekeeper",
     "labels": {
       "cloud": "c1",
-      "component": "orchestrator",
+      "component": "gatekeeper",
       "arrowhead": "true"
     }
   },
@@ -11,42 +11,43 @@
   "spec": {
     "instances": [
       {
-        "name": "c1-orchestrator",
+        "name": "c1-gatekeeper",
         "type": "container",
         "image": "aitiaiiot/arrowhead-system:4.6.1",
         "environment": {
-          "SYSTEM_NAME": "orchestrator",
+          "SYSTEM_NAME": "gatekeeper",
           "TZ": "Europe/Amsterdam",
           "PASSWORD": "123456"
         },
         "ports": [
           {
-            "container": 8441,
+            "host": 8449,
+            "container": 8449,
             "protocol": "tcp"
           }
         ],
         "volumes": [
           {
             "type": "bind",
-            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1-props/orchestrator/application.properties",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1-props/gatekeeper/application.properties",
             "mountPath": "/opt/arrowhead/application.properties",
             "readOnly": true
           },
           {
             "type": "bind",
-            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1/orchestrator/certificates",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1/gatekeeper/certificates",
             "mountPath": "/opt/arrowhead/certificates",
             "readOnly": true
           },
           {
             "type": "bind",
-            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/orchestrator/log4j2.xml",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/gatekeeper/log4j2.xml",
             "mountPath": "/opt/arrowhead/log4j2.xml",
             "readOnly": true
           },
           {
             "type": "bind",
-            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/orchestrator/run.sh",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/gatekeeper/run.sh",
             "mountPath": "/opt/arrowhead/run.sh",
             "readOnly": true
           }

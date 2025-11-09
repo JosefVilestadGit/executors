@@ -1,247 +1,217 @@
 # Docker Reconciler Examples
 
-This directory contains example service definitions for the ColonyOS docker-reconciler.
+This directory contains example blueprint specifications for deploying containers using the docker-reconciler.
 
-## Available Examples
+## Example Files
 
-### 1. Docker Executor Deployment
+### 1. executor-deployment-definition.json
+The BlueprintDefinition that registers the ExecutorDeployment kind with ColonyOS. This must be added once (by colony owner) before you can create ExecutorDeployment blueprints.
 
-Deploy ColonyOS docker executors as managed services:
-
-- **File**: `docker-executor.json`
-- **Definition**: `docker-executor-definition.json`
-- **Kind**: `ExecutorDeployment`
-
-This example shows how to deploy executor containers that can run processes in your colony.
-
-### 2. Arrowhead Framework Cloud Deployment
-
-Deploy an Eclipse Arrowhead Framework cloud as ColonyOS services:
-
-**Quick Start**:
+**Usage:**
 ```bash
-./deploy-arrowhead-c1.sh
+colonies blueprint definition add --spec executor-deployment-definition.json
 ```
 
-**Service Files**:
-- `arrowhead-c1-database.json` - MySQL database
-- `arrowhead-c1-serviceregistry.json` - Service Registry
-- `arrowhead-c1-authorization.json` - Authorization
-- `arrowhead-c1-orchestrator.json` - Orchestrator
-- `arrowhead-c1-eventhandler.json` - Event Handler
-- `arrowhead-c1-gatekeeper.json` - Gatekeeper
-- `arrowhead-c1-gateway.json` - Gateway
+### 2. docker-executor-edge.json
+Deploys a docker executor specifically on the **edge node** (docker-reconciler-edge).
 
-**Documentation**: See `ARROWHEAD_DEPLOYMENT_GUIDE.md` for detailed instructions.
+**Key Settings:**
+- `executorType`: `docker-reconciler` - Requires a docker-reconciler type executor
+- `executorName`: `docker-reconciler-edge` - Targets the specific edge node reconciler
+- `replicas`: 1 - Single executor instance
 
-**Scripts**:
-- `deploy-arrowhead-c1.sh` - Deploy all Arrowhead components
-- `cleanup-arrowhead-c1.sh` - Remove all Arrowhead services
+**Use Case:** When you need a docker executor running specifically in the edge datacenter.
 
-### 3. Service Definitions
-
-The docker-reconciler requires service definitions (CRDs) to be registered:
-
-- `docker-deployment-definition.json` - Defines DockerDeployment kind
-- `docker-executor-definition.json` - Defines ExecutorDeployment kind (already exists)
-- `arrowhead-cloud-definition.json` - Defines ArrowheadCloud kind (for future use)
-
-## Service Definition Concepts
-
-ColonyOS uses Kubernetes-inspired service definitions:
-
-1. **ServiceDefinition** (CRD): Defines a new service kind with JSON schema validation
-2. **Service** (CR): An instance of a service kind
-
-Example flow:
+**Usage:**
 ```bash
-# 1. Register the service definition (colony owner only)
-colonies service definition add --spec docker-deployment-definition.json
-
-# 2. Create service instances
-colonies service add --spec arrowhead-c1-database.json
-
-# 3. Manage services
-colonies service get --name c1-database
-colonies service set --name c1-database --key replicas --value 2
-colonies service history --name c1-database
+colonies blueprint add --spec docker-executor-edge.json
 ```
 
-## Architecture
+### 3. docker-executor-any-node.json
+Deploys docker executors on **any available docker-reconciler node** with automatic load balancing.
 
-### How It Works
+**Key Settings:**
+- `executorType`: `docker-reconciler` - Requires a docker-reconciler type executor
+- `executorName`: *not specified* - ANY reconciler can handle it
+- `replicas`: 3 - Creates 3 executor instances
 
-1. **User creates/updates a service** → Server validates against ServiceDefinition schema
-2. **Server triggers reconciliation** → Creates a process for the configured reconciler
-3. **Reconciler receives process** → Reads service spec and reconciles actual state
-4. **Reconciler reports status** → Updates service status with instance information
-5. **Periodic reconciliation** → Ensures desired state matches actual state
+**Use Case:** When you want high availability and don't care which node runs the executors. The reconciliation process will be picked up by whichever reconciler claims it first.
 
-### Multi-Container Deployments
-
-For complex deployments like Arrowhead with multiple containers:
-
-**Current Approach** (works now):
-- Deploy each component as a separate service
-- Use labels to group related services
-- Scripts to deploy/manage multiple services together
-
-**Future Enhancement** (requires custom reconciler):
-- Create ArrowheadCloud kind with all components in one spec
-- Build arrowhead-reconciler that understands cloud topology
-- Deploy entire cloud as a single service
-
-## Example: Deploying Arrowhead Cloud
-
+**Usage:**
 ```bash
-# Ensure prerequisites are met
-ls /home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/.env
+colonies blueprint add --spec docker-executor-any-node.json
+```
 
-# Deploy all components
-cd /home/johan/dev/github/colonyos/executors/docker-reconciler/examples
-./deploy-arrowhead-c1.sh
+## Executor Targeting Strategies
+
+### Strategy 1: Target Specific Executor (Pinned Deployment)
+```json
+{
+  "executorType": "docker-reconciler",
+  "executorName": "docker-reconciler-edge"
+}
+```
+- ✅ Guarantees deployment on specific node
+- ✅ Good for location-specific requirements
+- ⚠️ Fails if that executor is down
+
+### Strategy 2: Any Executor (Load Balanced)
+```json
+{
+  "executorType": "docker-reconciler"
+  // No executorName specified
+}
+```
+- ✅ High availability - any reconciler can handle it
+- ✅ Automatic load distribution
+- ✅ Survives individual node failures
+- ⚠️ You don't control which node it runs on
+
+### Strategy 3: Multiple Specific Executors (Failover)
+```json
+{
+  "executorType": "docker-reconciler",
+  "executorNames": ["docker-reconciler-node1", "docker-reconciler-edge"]
+}
+```
+- ✅ Failover between specific nodes
+- ✅ More control than "any executor"
+- ✅ Higher availability than single executor
+
+## Common Configuration
+
+All examples include:
+
+### Environment Variables
+- **ColonyOS Connection**: Server host, port, TLS settings
+- **Colony Credentials**: Colony name and private key
+- **S3/MinIO**: For file storage integration
+- **Executor Metadata**: Type, capabilities, location
+
+### Volumes
+- `/var/run/docker.sock` - Required for Docker API access
+- `/tmp/colonies` - Shared file storage directory
+
+### Security
+- `privileged: true` - Required for Docker-in-Docker operations
+
+## Testing the Examples
+
+### 1. Register the Blueprint Definition (one-time setup)
+```bash
+export COLONIES_PRVKEY=${COLONIES_COLONY_PRVKEY}
+colonies blueprint definition add --spec executor-deployment-definition.json
+```
+
+### 2. Deploy to Edge Node
+```bash
+colonies blueprint add --spec docker-executor-edge.json
 
 # Check status
-colonies service ls
-colonies service get --name c1-database
-colonies service get --name c1-serviceregistry
+colonies blueprint get --name docker-executor-edge
+
+# Watch reconciliation
+colonies process ps
+```
+
+### 3. Deploy to Any Node (Load Balanced)
+```bash
+colonies blueprint add --spec docker-executor-any-node.json
+
+# Check which node picked it up
+colonies executor ls
+```
+
+## Updating Deployments
+
+### Scale Up/Down
+```bash
+# Scale edge deployment to 3 replicas
+colonies blueprint set --name docker-executor-edge --key spec.replicas --value 3
+
+# Scale down to 1
+colonies blueprint set --name docker-executor-edge --key spec.replicas --value 1
+```
+
+### Change Image Version
+```bash
+colonies blueprint set --name docker-executor-edge \
+  --key spec.image --value colonyos/dockerexecutor:v1.0.8
+```
+
+### Update Environment Variables
+```bash
+colonies blueprint set --name docker-executor-edge \
+  --key spec.env.EXECUTOR_GPU --value 1
+```
+
+## Monitoring
+
+### Check Blueprint Status
+```bash
+# List all blueprints
+colonies blueprint ls
+
+# Get specific blueprint
+colonies blueprint get --name docker-executor-edge
 
 # View history
-colonies service history --name c1-serviceregistry
-
-# Scale a component
-colonies service set --name c1-serviceregistry --key replicas --value 2
-
-# Cleanup
-./cleanup-arrowhead-c1.sh
+colonies blueprint history --name docker-executor-edge
 ```
 
-## Files in This Directory
-
-```
-├── README.md                           # This file
-├── ARROWHEAD_DEPLOYMENT_GUIDE.md       # Detailed Arrowhead deployment guide
-├── ARROWHEAD_EXAMPLE.md                # Conceptual multi-container example
-│
-├── docker-deployment-definition.json   # DockerDeployment CRD
-├── docker-executor-definition.json     # ExecutorDeployment CRD
-├── arrowhead-cloud-definition.json     # ArrowheadCloud CRD (future use)
-│
-├── docker-executor.json                # Executor deployment example
-│
-├── arrowhead-c1-database.json          # Arrowhead database service
-├── arrowhead-c1-serviceregistry.json   # Arrowhead service registry
-├── arrowhead-c1-authorization.json     # Arrowhead authorization
-├── arrowhead-c1-orchestrator.json      # Arrowhead orchestrator
-├── arrowhead-c1-eventhandler.json      # Arrowhead event handler
-├── arrowhead-c1-gatekeeper.json        # Arrowhead gatekeeper
-├── arrowhead-c1-gateway.json           # Arrowhead gateway
-│
-├── arrowhead-cloud-c1.json             # Conceptual single-service approach
-├── arrowhead-cloud-c1-practical.json   # Multi-container approach (not used)
-│
-├── deploy-arrowhead-c1.sh              # Deployment script
-└── cleanup-arrowhead-c1.sh             # Cleanup script
-```
-
-## Testing
-
-After deploying services, verify they work:
-
+### Check Running Containers
 ```bash
-# Check all services
-colonies service ls
+# Via ColonyOS
+colonies executor ls
 
-# Check individual service
-colonies service get --name c1-database
-
-# Check Docker containers
-docker ps | grep c1-
-
-# Check reconciler logs
-docker logs docker-reconciler
-
-# Check processes
-colonies process ps
-colonies process pss
-colonies process psf
+# Via Docker (on the node)
+docker ps --filter label=colonies.blueprint=docker-executor-edge
 ```
 
-## Common Operations
-
-### Deploy a Service
+### Check Nodes
 ```bash
-colonies service add --spec service-definition.json
-```
+# List all registered nodes
+colonies node ls
 
-### Check Service Status
-```bash
-colonies service get --name service-name
-```
-
-### Update a Service Field
-```bash
-colonies service set --name service-name --key replicas --value 2
-```
-
-### Update Entire Service
-```bash
-# Edit JSON file
-colonies service update --spec service-definition.json
-```
-
-### Remove a Service
-```bash
-colonies service remove --name service-name
-```
-
-### View Service History
-```bash
-colonies service history --name service-name
+# Get specific node details
+colonies node get --name edge
 ```
 
 ## Troubleshooting
 
-### Service not starting
-
-1. Check reconciler logs:
-   ```bash
-   docker logs docker-reconciler
-   ```
-
-2. Check failed processes:
-   ```bash
-   colonies process psf --count 10
-   ```
-
-3. Verify service definition exists:
-   ```bash
-   colonies service definition ls
-   ```
-
-### Container not running
-
-1. Check service status:
-   ```bash
-   colonies service get --name service-name
-   ```
-
-2. Check Docker:
-   ```bash
-   docker ps -a | grep service-name
-   docker logs container-name
-   ```
-
-### Permission issues
-
-Ensure volumes and paths are accessible:
+### Blueprint Stuck in "Reconciling"
 ```bash
-ls -la /path/to/volume
+# Check reconciler logs
+docker logs docker-reconciler-edge -f
+
+# Check process status
+colonies process ps
+
+# Look for errors
+colonies blueprint get --name docker-executor-edge
 ```
 
-## Next Steps
+### Containers Not Starting
+```bash
+# On the reconciler node, check Docker
+docker ps -a --filter label=colonies.managed=true
 
-- Explore creating custom reconcilers for specialized workloads
-- Implement health checks and auto-healing
-- Add support for Docker Compose file imports
-- Create visualization tools for service topology
+# Check container logs
+docker logs <container-id>
+```
+
+### Wrong Node Picked Up Blueprint
+If you specified `executorName` but the wrong node picked it up:
+1. Check the executor name matches exactly
+2. Verify that executor is registered: `colonies executor ls`
+3. Check blueprint spec: `colonies blueprint get --name <name>`
+
+## Advanced Examples
+
+See the `arrowhead/` directory for examples of deploying complex multi-service applications using DockerDeployment kind.
+
+## See Also
+
+- [../../README.md](../../README.md) - Docker Reconciler documentation
+- [../../../../colonies/docs/Blueprints.md](../../../../colonies/docs/Blueprints.md) - Complete blueprint guide
+- [../../../../colonies/docs/Reconciliation.md](../../../../colonies/docs/Reconciliation.md) - How reconciliation works

@@ -25,7 +25,7 @@ type DeploymentSpec struct {
 	Image        string                 `json:"image"`
 	Replicas     int                    `json:"replicas"`
 	ExecutorType string                 `json:"executorType"`
-	ExecutorName string                 `json:"executorName,omitempty"` // Base executor name for colony executors
+	ExecutorName string                 `json:"executorName,omitempty"` // Target reconciler name (optional - if not set, any reconciler can handle)
 	CPU          string                 `json:"cpu"`
 	Memory       string                 `json:"memory"`
 	Env          map[string]interface{} `json:"env"`
@@ -326,8 +326,9 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, blueprin
 		for i := 0; i < containersToStart; i++ {
 			// Generate unique executor name that will be used as both container name and executor name
 			var containerName string
-			if spec.ExecutorName != "" {
-				uniqueExecutorName, err := r.generateUniqueExecutorName(blueprint.Metadata.Namespace, spec.ExecutorName)
+			if blueprint.Kind == "ExecutorDeployment" {
+				// For executor deployments, generate unique name based on blueprint name
+				uniqueExecutorName, err := r.generateUniqueExecutorName(blueprint.Metadata.Namespace, blueprint.Metadata.Name)
 				if err != nil {
 					r.addLog(process, fmt.Sprintf("Error generating unique executor name: %v", err))
 					return fmt.Errorf("failed to generate unique executor name: %w", err)
@@ -625,7 +626,7 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 
 	// If this is a colony executor deployment, use the container name as executor name
 	// (the container name is now the unique executor name generated in Reconcile())
-	if spec.ExecutorName != "" {
+	if blueprint.Kind == "ExecutorDeployment" {
 		envVars = append(envVars, "COLONIES_EXECUTOR_NAME="+containerName)
 
 		// Add node metadata environment variables for executor registration
@@ -633,9 +634,9 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 		envVars = append(envVars, nodeEnvVars...)
 
 		log.WithFields(log.Fields{
-			"BaseExecutorName": spec.ExecutorName,
-			"ExecutorName":     containerName,
-			"ContainerName":    containerName,
+			"BlueprintName":   blueprint.Metadata.Name,
+			"ExecutorName":    containerName,
+			"ContainerName":   containerName,
 		}).Info("Using container name as executor name")
 		r.addLog(process, fmt.Sprintf("Executor name: %s", containerName))
 	}

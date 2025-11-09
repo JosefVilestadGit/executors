@@ -1,35 +1,36 @@
 version: '3.8'
 
 services:
-  docker-executor-reconciler:
-    build:
-      context: ..
-      dockerfile: docker-executor-reconciler/Dockerfile
-    container_name: docker-executor-reconciler
+  # Additional docker reconciler node (node1 is already in colonies docker-compose)
+  docker-reconciler-edge:
+    image: colonyos/docker-reconciler:v1.0.2
+    container_name: docker-reconciler-edge
     restart: unless-stopped
     volumes:
       # Mount Docker socket to manage containers on the host
       - /var/run/docker.sock:/var/run/docker.sock:rw
-    env_file:
-      - .env
     environment:
-      # ColonyOS server connection (can be overridden in .env)
-      COLONIES_SERVER_HOST: ${COLONIES_SERVER_HOST:-localhost}
-      COLONIES_SERVER_PORT: ${COLONIES_SERVER_PORT:-50080}
-      COLONIES_INSECURE: ${COLONIES_INSECURE:-true}
+      # ColonyOS server connection (sourced from docker-compose.env)
+      COLONIES_SERVER_HOST: ${COLONIES_SERVER_HOST}
+      COLONIES_SERVER_PORT: ${COLONIES_SERVER_PORT}
+      COLONIES_INSECURE: ${COLONIES_INSECURE}
 
-      # Colony information (can be overridden in .env)
-      COLONIES_COLONY_NAME: ${COLONIES_COLONY_NAME:-dev}
-      COLONIES_COLONY_PRVKEY: ${COLONIES_COLONY_PRVKEY:-}
+      # Colony information
+      COLONIES_COLONY_NAME: ${COLONIES_COLONY_NAME}
+      COLONIES_COLONY_PRVKEY: ${COLONIES_COLONY_PRVKEY}
 
-      # Executor configuration (can be overridden in .env)
-      COLONIES_EXECUTOR_NAME: ${COLONIES_EXECUTOR_NAME:-docker-executor-reconciler-1}
-      COLONIES_EXECUTOR_TYPE: ${COLONIES_EXECUTOR_TYPE:-docker-executor-reconciler}
+      # Executor configuration
+      COLONIES_EXECUTOR_NAME: ${COLONIES_EXECUTOR_NAME}
+      COLONIES_EXECUTOR_TYPE: ${COLONIES_EXECUTOR_TYPE}
+
+      # Node metadata
+      COLONIES_NODE_NAME: ${COLONIES_NODE_NAME}
+      COLONIES_NODE_LOCATION: ${COLONIES_NODE_LOCATION}
     networks:
-      - colonies-network
+      - colonies_default
 
 networks:
-  colonies-network:
+  colonies_default:
     external: true
-    # If the network doesn't exist, create it with:
-    # docker network create colonies-network
+    # This is the default network created by the colonies docker-compose
+    # It must already exist (created when you run colonies docker-compose up)

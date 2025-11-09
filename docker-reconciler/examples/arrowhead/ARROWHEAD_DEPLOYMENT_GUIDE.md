@@ -1,6 +1,6 @@
 # Deploying Arrowhead Cloud with ColonyOS
 
-This guide shows how to deploy an Eclipse Arrowhead Framework cloud as ColonyOS managed services.
+This guide shows how to deploy an Eclipse Arrowhead Framework cloud as ColonyOS managed blueprints.
 
 ## Overview
 
@@ -17,19 +17,19 @@ The Arrowhead Framework is an IoT platform that provides service-oriented archit
 
 ## Deployment Architecture
 
-Each Arrowhead component is deployed as a separate ColonyOS service of kind `ExecutorDeployment`. This approach:
+Each Arrowhead component is deployed as a separate ColonyOS blueprint of kind `ExecutorDeployment`. This approach:
 
 - Works with the docker-reconciler immediately
 - Allows independent scaling and management of each component
-- Provides individual history tracking for each service
+- Provides individual history tracking for each blueprint
 - Enables fine-grained control over the Arrowhead cloud
 
 ### Networking
 
 The docker-reconciler automatically configures:
 
-- **Network Aliases**: Each container gets a network alias matching its service name (e.g., `c1-serviceregistry`), allowing inter-container communication without /etc/hosts modifications
-- **Port Bindings**: All ports defined in the service spec are automatically exposed on the host machine (e.g., port 8443 for service registry), enabling access from the Arrowhead Go CLI and other host-based tools
+- **Network Aliases**: Each container gets a network alias matching its container name (e.g., `c1-serviceregistry`), allowing inter-container communication without /etc/hosts modifications
+- **Port Bindings**: All ports defined in the blueprint spec are automatically exposed on the host machine (e.g., port 8443 for service registry), enabling access from the Arrowhead Go CLI and other host-based tools
 - **Docker Network**: All containers join the `colonies-network` bridge network for seamless communication
 
 ## Prerequisites
@@ -47,7 +47,7 @@ Before deploying, ensure you have:
    - Properties: `c1-props/{system}/application.properties`
    - Configs: `config/{system}/log4j2.xml` and `run.sh`
 
-4. **ColonyOS services running**
+4. **ColonyOS blueprints running**
    - Colonies server
    - Docker-reconciler executor
 
@@ -62,7 +62,7 @@ cd /home/johan/dev/github/colonyos/executors/docker-reconciler/examples
 
 This script will:
 1. Read PASSWORD from .env file
-2. Update all service definitions with the password
+2. Update all blueprint definitions with the password
 3. Deploy components in the correct order (database first, then core systems)
 4. Provide status commands to check deployment
 
@@ -72,42 +72,42 @@ If you prefer to deploy manually:
 
 ```bash
 # 1. Deploy database first
-colonies service add --spec arrowhead-c1-database.json
+colonies blueprint add --spec arrowhead-c1-database.json
 
 # Wait for database to be ready
 sleep 5
 
 # 2. Deploy core systems (can be done in parallel)
-colonies service add --spec arrowhead-c1-serviceregistry.json
-colonies service add --spec arrowhead-c1-authorization.json
-colonies service add --spec arrowhead-c1-orchestrator.json
-colonies service add --spec arrowhead-c1-eventhandler.json
-colonies service add --spec arrowhead-c1-gatekeeper.json
-colonies service add --spec arrowhead-c1-gateway.json
+colonies blueprint add --spec arrowhead-c1-serviceregistry.json
+colonies blueprint add --spec arrowhead-c1-authorization.json
+colonies blueprint add --spec arrowhead-c1-orchestrator.json
+colonies blueprint add --spec arrowhead-c1-eventhandler.json
+colonies blueprint add --spec arrowhead-c1-gatekeeper.json
+colonies blueprint add --spec arrowhead-c1-gateway.json
 ```
 
 ## Checking Status
 
-View all services:
+View all blueprints:
 ```bash
-colonies service ls
+colonies blueprint ls
 ```
 
-Check individual service status:
+Check individual blueprint status:
 ```bash
-colonies service get --name c1-database
-colonies service get --name c1-serviceregistry
+colonies blueprint get --name c1-database
+colonies blueprint get --name c1-serviceregistry
 # ... etc
 ```
 
-View service history:
+View blueprint history:
 ```bash
-colonies service history --name c1-serviceregistry
+colonies blueprint history --name c1-serviceregistry
 ```
 
-## Service Files
+## Blueprint Files
 
-Each component has its own JSON service definition:
+Each component has its own JSON blueprint definition:
 
 - `arrowhead-c1-database.json` - MySQL database
 - `arrowhead-c1-serviceregistry.json` - Service Registry core system
@@ -117,35 +117,35 @@ Each component has its own JSON service definition:
 - `arrowhead-c1-gatekeeper.json` - Gatekeeper core system
 - `arrowhead-c1-gateway.json` - Gateway core system
 
-All services use:
+All blueprints use:
 - **Kind**: `ExecutorDeployment`
 - **Labels**: `cloud: c1`, `arrowhead: true`, `component: {name}`
 - **Replicas**: 1 (can be scaled later)
 - **Port Bindings**: Ports are automatically exposed on the host machine
-- **Network Aliases**: Containers can communicate using service names (e.g., `c1-serviceregistry`)
+- **Network Aliases**: Containers can communicate using container names (e.g., `c1-serviceregistry`)
 
-## Managing Services
+## Managing Blueprints
 
 ### Scaling
 
 To scale a component (e.g., run 2 service registry instances):
 ```bash
-colonies service set --name c1-serviceregistry --key replicas --value 2
+colonies blueprint set --name c1-serviceregistry --key replicas --value 2
 ```
 
 ### Updating Configuration
 
-If you change application.properties or other config files on the host, restart the service:
+If you change application.properties or other config files on the host, restart the blueprint:
 ```bash
-colonies service set --name c1-serviceregistry --key replicas --value 0
+colonies blueprint set --name c1-serviceregistry --key replicas --value 0
 sleep 2
-colonies service set --name c1-serviceregistry --key replicas --value 1
+colonies blueprint set --name c1-serviceregistry --key replicas --value 1
 ```
 
-Or update the service definition and reapply:
+Or update the blueprint definition and reapply:
 ```bash
 # Edit arrowhead-c1-serviceregistry.json
-colonies service update --spec arrowhead-c1-serviceregistry.json
+colonies blueprint update --spec arrowhead-c1-serviceregistry.json
 ```
 
 ### Viewing Logs
@@ -161,20 +161,20 @@ docker logs c1-serviceregistry-{suffix}
 
 ## Cleanup
 
-Remove all Arrowhead services:
+Remove all Arrowhead blueprints:
 ```bash
 ./cleanup-arrowhead-c1.sh
 ```
 
 Or manually:
 ```bash
-colonies service remove --name c1-gateway
-colonies service remove --name c1-gatekeeper
-colonies service remove --name c1-eventhandler
-colonies service remove --name c1-orchestrator
-colonies service remove --name c1-authorization
-colonies service remove --name c1-serviceregistry
-colonies service remove --name c1-database
+colonies blueprint remove --name c1-gateway
+colonies blueprint remove --name c1-gatekeeper
+colonies blueprint remove --name c1-eventhandler
+colonies blueprint remove --name c1-orchestrator
+colonies blueprint remove --name c1-authorization
+colonies blueprint remove --name c1-serviceregistry
+colonies blueprint remove --name c1-database
 ```
 
 ## Troubleshooting
@@ -198,13 +198,13 @@ colonies service remove --name c1-database
 
 ### Port conflicts
 
-If ports are already in use, update the service definition and change the port number:
+If ports are already in use, update the blueprint definition and change the port number:
 ```bash
 # Edit the JSON file to change the port
 vi arrowhead-c1-serviceregistry.json
 
-# Update the service
-colonies service update --spec arrowhead-c1-serviceregistry.json
+# Update the blueprint
+colonies blueprint update --spec arrowhead-c1-serviceregistry.json
 ```
 
 ### Password issues
@@ -238,9 +238,9 @@ For a more integrated experience, you could:
 4. **Implement dependency handling** so core systems wait for database
 5. **Add auto-discovery** so components can find each other via ColonyOS
 
-## Service Definition Structure
+## Blueprint Definition Structure
 
-Each service follows this pattern:
+Each blueprint follows this pattern:
 
 ```json
 {
@@ -267,8 +267,8 @@ Each service follows this pattern:
 ```
 
 The docker-reconciler will:
-1. Receive the service spec
+1. Receive the blueprint spec
 2. Start the specified number of containers
 3. Monitor container health
-4. Update service status
+4. Update blueprint status
 5. Handle scaling when replicas change

@@ -1,8 +1,8 @@
 module github.com/colonyos/executors/docker
 
-go 1.25
+go 1.24.0
 
-toolchain go1.25.4
+toolchain go1.24.10
 
 require (
 	github.com/colonyos/colonies v1.9.0
@@ -136,6 +136,8 @@ require (
 )
 
 replace github.com/colonyos/executors/common v0.0.4 => ../common/
+
+replace github.com/colonyos/colonies v1.9.0 => ../../colonies/
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect

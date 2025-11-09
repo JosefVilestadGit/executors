@@ -19,6 +19,7 @@
         },
         "ports": [
           {
+            "host": 3306,
             "container": 3306,
             "protocol": "tcp"
           }

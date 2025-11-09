@@ -1,9 +1,9 @@
 {
   "metadata": {
-    "name": "c1-serviceregistry",
+    "name": "c1-eventhandler",
     "labels": {
       "cloud": "c1",
-      "component": "serviceregistry",
+      "component": "eventhandler",
       "arrowhead": "true"
     }
   },
@@ -11,42 +11,43 @@
   "spec": {
     "instances": [
       {
-        "name": "c1-serviceregistry",
+        "name": "c1-eventhandler",
         "type": "container",
         "image": "aitiaiiot/arrowhead-system:4.6.1",
         "environment": {
-          "SYSTEM_NAME": "serviceregistry",
+          "SYSTEM_NAME": "eventhandler",
           "TZ": "Europe/Amsterdam",
           "PASSWORD": "123456"
         },
         "ports": [
           {
-            "container": 8443,
+            "host": 8455,
+            "container": 8455,
             "protocol": "tcp"
           }
         ],
         "volumes": [
           {
             "type": "bind",
-            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1-props/serviceregistry/application.properties",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1-props/eventhandler/application.properties",
             "mountPath": "/opt/arrowhead/application.properties",
             "readOnly": true
           },
           {
             "type": "bind",
-            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1/serviceregistry/certificates",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1/eventhandler/certificates",
             "mountPath": "/opt/arrowhead/certificates",
             "readOnly": true
           },
           {
             "type": "bind",
-            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/serviceregistry/log4j2.xml",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/eventhandler/log4j2.xml",
             "mountPath": "/opt/arrowhead/log4j2.xml",
             "readOnly": true
           },
           {
             "type": "bind",
-            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/serviceregistry/run.sh",
+            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/eventhandler/run.sh",
             "mountPath": "/opt/arrowhead/run.sh",
             "readOnly": true
           }
