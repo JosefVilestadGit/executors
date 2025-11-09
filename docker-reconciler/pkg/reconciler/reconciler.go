@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -113,6 +114,28 @@ type Reconciler struct {
 	dockerClient   *dockerclient.Client
 	client         *client.ColoniesClient
 	executorPrvKey string
+}
+
+// getNodeEnvVars returns environment variables with node metadata for containers
+func getNodeEnvVars() []string {
+	// Use COLONIES_NODE_NAME if set, otherwise fall back to hostname
+	nodeName := os.Getenv("COLONIES_NODE_NAME")
+	if nodeName == "" {
+		hostname, _ := os.Hostname()
+		nodeName = hostname
+	}
+
+	location := os.Getenv("COLONIES_NODE_LOCATION")
+	if location == "" {
+		location = "default"
+	}
+
+	envVars := []string{
+		"COLONIES_NODE_NAME=" + nodeName,
+		"COLONIES_NODE_LOCATION=" + location,
+	}
+
+	return envVars
 }
 
 func CreateReconciler(client *client.ColoniesClient, executorPrvKey string) (*Reconciler, error) {
@@ -522,6 +545,16 @@ func (r *Reconciler) CollectStatus(blueprint *core.Blueprint) (map[string]interf
 }
 
 func (r *Reconciler) pullImage(process *core.Process, image string) error {
+	// Check if image exists locally first
+	ctx := context.Background()
+	_, _, err := r.dockerClient.ImageInspectWithRaw(ctx, image)
+	if err == nil {
+		// Image exists locally, skip pulling
+		r.addLog(process, fmt.Sprintf("Image already exists locally: %s", image))
+		return nil
+	}
+
+	// Image doesn't exist, pull it
 	r.addLog(process, fmt.Sprintf("Pulling image: %s", image))
 
 	logChan := make(chan docker.LogMessage, 100)
@@ -594,6 +627,11 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 	// (the container name is now the unique executor name generated in Reconcile())
 	if spec.ExecutorName != "" {
 		envVars = append(envVars, "COLONIES_EXECUTOR_NAME="+containerName)
+
+		// Add node metadata environment variables for executor registration
+		nodeEnvVars := getNodeEnvVars()
+		envVars = append(envVars, nodeEnvVars...)
+
 		log.WithFields(log.Fields{
 			"BaseExecutorName": spec.ExecutorName,
 			"ExecutorName":     containerName,
@@ -718,6 +756,13 @@ func (r *Reconciler) startDockerDeploymentInstance(process *core.Process, instan
 	}
 	envVars = append(envVars, "COLONIES_DEPLOYMENT="+blueprint.Metadata.Name)
 	envVars = append(envVars, "COLONIES_CONTAINER_NAME="+containerName)
+
+	// If this instance is a colony executor (has COLONIES_EXECUTOR_NAME), add node metadata
+	if _, hasExecutorName := instance.Environment["COLONIES_EXECUTOR_NAME"]; hasExecutorName {
+		nodeEnvVars := getNodeEnvVars()
+		envVars = append(envVars, nodeEnvVars...)
+		log.WithField("ContainerName", containerName).Debug("Added node metadata for executor instance")
+	}
 
 	// Create container config
 	config := &container.Config{
