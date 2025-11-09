@@ -4,7 +4,8 @@
     "labels": {
       "cloud": "c1",
       "component": "gatekeeper",
-      "arrowhead": "true"
+      "arrowhead": "true",
+      "updated": "2025-11-09"
     }
   },
   "kind": "DockerDeployment",
@@ -29,25 +30,25 @@
         "volumes": [
           {
             "type": "bind",
-            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1-props/gatekeeper/application.properties",
+            "hostPath": "/home/johan/dev/github/eislab-cps/arrowhead-core-docker/c1-props/gatekeeper/application.properties",
             "mountPath": "/opt/arrowhead/application.properties",
             "readOnly": true
           },
           {
             "type": "bind",
-            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/c1/gatekeeper/certificates",
+            "hostPath": "/home/johan/dev/github/eislab-cps/arrowhead-core-docker/c1/gatekeeper/certificates",
             "mountPath": "/opt/arrowhead/certificates",
             "readOnly": true
           },
           {
             "type": "bind",
-            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/gatekeeper/log4j2.xml",
+            "hostPath": "/home/johan/dev/github/eislab-cps/arrowhead-core-docker/config/gatekeeper/log4j2.xml",
             "mountPath": "/opt/arrowhead/log4j2.xml",
             "readOnly": true
           },
           {
             "type": "bind",
-            "hostPath": "/home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/config/gatekeeper/run.sh",
+            "hostPath": "/home/johan/dev/github/eislab-cps/arrowhead-core-docker/config/gatekeeper/run.sh",
             "mountPath": "/opt/arrowhead/run.sh",
             "readOnly": true
           }
