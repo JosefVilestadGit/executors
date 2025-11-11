@@ -151,6 +151,100 @@ func getNodeEnvVars() []string {
 	return envVars
 }
 
+// getDefaultEnvVars returns default environment variables that are auto-injected into containers
+// User-provided env vars in the blueprint will override these defaults
+func (r *Reconciler) getDefaultEnvVars(executorType string) map[string]string {
+	defaults := make(map[string]string)
+
+	// Colonies connection settings (inherit from reconciler)
+	if backends := os.Getenv("COLONIES_CLIENT_BACKENDS"); backends != "" {
+		defaults["COLONIES_CLIENT_BACKENDS"] = backends
+	}
+	if host := os.Getenv("COLONIES_CLIENT_HTTP_HOST"); host != "" {
+		defaults["COLONIES_CLIENT_HTTP_HOST"] = host
+	}
+	if port := os.Getenv("COLONIES_CLIENT_HTTP_PORT"); port != "" {
+		defaults["COLONIES_CLIENT_HTTP_PORT"] = port
+	}
+	if insecure := os.Getenv("COLONIES_CLIENT_HTTP_INSECURE"); insecure != "" {
+		defaults["COLONIES_CLIENT_HTTP_INSECURE"] = insecure
+	}
+	if host := os.Getenv("COLONIES_SERVER_HOST"); host != "" {
+		defaults["COLONIES_SERVER_HOST"] = host
+	}
+	if port := os.Getenv("COLONIES_SERVER_PORT"); port != "" {
+		defaults["COLONIES_SERVER_PORT"] = port
+	}
+	if tls := os.Getenv("COLONIES_SERVER_TLS"); tls != "" {
+		defaults["COLONIES_SERVER_TLS"] = tls
+	}
+	if tls := os.Getenv("COLONIES_TLS"); tls != "" {
+		defaults["COLONIES_TLS"] = tls
+	}
+	defaults["COLONIES_COLONY_NAME"] = r.colonyName
+
+	// S3/MinIO configuration (if available in reconciler environment)
+	if tls := os.Getenv("AWS_S3_TLS"); tls != "" {
+		defaults["AWS_S3_TLS"] = tls
+	}
+	if skip := os.Getenv("AWS_S3_SKIPVERIFY"); skip != "" {
+		defaults["AWS_S3_SKIPVERIFY"] = skip
+	}
+	if endpoint := os.Getenv("AWS_S3_ENDPOINT"); endpoint != "" {
+		defaults["AWS_S3_ENDPOINT"] = endpoint
+	}
+	if accessKey := os.Getenv("AWS_S3_ACCESSKEY"); accessKey != "" {
+		defaults["AWS_S3_ACCESSKEY"] = accessKey
+	}
+	if secretKey := os.Getenv("AWS_S3_SECRETKEY"); secretKey != "" {
+		defaults["AWS_S3_SECRETKEY"] = secretKey
+	}
+	if region := os.Getenv("AWS_S3_REGION_KEY"); region != "" {
+		defaults["AWS_S3_REGION_KEY"] = region
+	}
+	if bucket := os.Getenv("AWS_S3_BUCKET"); bucket != "" {
+		defaults["AWS_S3_BUCKET"] = bucket
+	}
+
+	// Locale/Timezone defaults
+	defaults["LANG"] = "en_US.UTF-8"
+	defaults["LANGUAGE"] = "en_US.UTF-8"
+	defaults["LC_ALL"] = "en_US.UTF-8"
+	defaults["LC_CTYPE"] = "UTF-8"
+	if tz := os.Getenv("TZ"); tz != "" {
+		defaults["TZ"] = tz
+	} else {
+		defaults["TZ"] = "Europe/Stockholm"
+	}
+
+	// Executor type and metadata defaults
+	defaults["EXECUTOR_TYPE"] = executorType
+	defaults["EXECUTOR_ADD_DEBUG_LOGS"] = "false"
+	defaults["EXECUTOR_FS_DIR"] = "/tmp/colonies"
+
+	// Hardware defaults
+	defaults["EXECUTOR_GPU"] = "0"
+	defaults["EXECUTOR_HW_MODEL"] = "n/a"
+	defaults["EXECUTOR_HW_NODES"] = "1"
+	defaults["EXECUTOR_HW_CPU"] = ""
+	defaults["EXECUTOR_HW_MEM"] = ""
+	defaults["EXECUTOR_HW_STORAGE"] = ""
+	defaults["EXECUTOR_HW_GPU_COUNT"] = "0"
+	defaults["EXECUTOR_HW_GPU_MEM"] = ""
+	defaults["EXECUTOR_HW_GPU_NODES_COUNT"] = "0"
+	defaults["EXECUTOR_HW_GPU_NAME"] = ""
+
+	// Location defaults
+	defaults["EXECUTOR_LOCATION_LONG"] = ""
+	defaults["EXECUTOR_LOCATION_LAT"] = ""
+	defaults["EXECUTOR_LOCATION_DESC"] = "n/a"
+
+	// Software version defaults (will be overridden with actual image)
+	defaults["EXECUTOR_SW_TYPE"] = "docker"
+
+	return defaults
+}
+
 func CreateReconciler(client *client.ColoniesClient, executorPrvKey, colonyOwnerKey, colonyName, location string) (*Reconciler, error) {
 	dockerHandler, err := docker.CreateDockerHandler()
 	if err != nil {
@@ -732,13 +826,35 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 		}
 	}
 
-	// Convert env map to string slice
-	envVars := []string{}
-	for k, v := range spec.Env {
-		envVars = append(envVars, fmt.Sprintf("%s=%v", k, v))
+	// Get executor type from spec (for child executors)
+	executorType := "container-executor" // default
+	if spec.ExecutorType != "" {
+		executorType = spec.ExecutorType
 	}
-	envVars = append(envVars, "COLONIES_DEPLOYMENT="+blueprint.Metadata.Name)
-	envVars = append(envVars, "COLONIES_CONTAINER_NAME="+containerName)
+
+	// Start with auto-injected defaults from reconciler config
+	envMap := r.getDefaultEnvVars(executorType)
+
+	// Override/merge with user-provided env vars from blueprint
+	if spec.Env != nil {
+		for k, v := range spec.Env {
+			envMap[k] = fmt.Sprintf("%v", v)
+		}
+	}
+
+	// Add image-specific metadata
+	envMap["EXECUTOR_SW_NAME"] = spec.Image
+	envMap["EXECUTOR_SW_VERSION"] = spec.Image
+
+	// Always set these (cannot be overridden)
+	envMap["COLONIES_DEPLOYMENT"] = blueprint.Metadata.Name
+	envMap["COLONIES_CONTAINER_NAME"] = containerName
+
+	// Convert merged env map to string slice
+	envVars := []string{}
+	for k, v := range envMap {
+		envVars = append(envVars, fmt.Sprintf("%s=%s", k, v))
+	}
 
 	// If this is a colony executor deployment, generate keys and register executor
 	// (the container name is now the unique executor name generated in Reconcile())
@@ -757,11 +873,7 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 		}
 
 		// Register executor with Colonies server using colony owner privileges
-		// Use EXECUTOR_TYPE from env vars (not spec.ExecutorType which is for reconciler matching)
-		executorType, ok := spec.Env["EXECUTOR_TYPE"].(string)
-		if !ok || executorType == "" {
-			executorType = "container-executor" // default
-		}
+		// executorType was already determined above from spec.ExecutorType
 		executor := core.CreateExecutor(executorID, executorType, containerName, r.colonyName, time.Now(), time.Now())
 
 		// Set location from reconciler (inherits from parent)

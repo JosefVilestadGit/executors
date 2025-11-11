@@ -15,6 +15,17 @@
       "type": "object",
       "required": ["cloudName", "password", "database", "systems"],
       "properties": {
+        "executorName": {
+          "type": "string",
+          "description": "Optional: Target specific reconciler node (e.g., 'edge-node-docker-reconciler'). If omitted, any reconciler with matching executorType can handle this deployment."
+        },
+        "executorNames": {
+          "type": "array",
+          "description": "Optional: Target multiple specific reconciler nodes. First available node gets the deployment. Alternative to 'executorName' for multi-node targeting.",
+          "items": {
+            "type": "string"
+          }
+        },
         "cloudName": {
           "type": "string",
           "description": "Name/prefix for this Arrowhead cloud (e.g., 'c1')"
@@ -109,6 +120,10 @@
           }
         }
       }
+    },
+    "handler": {
+      "executorType": "docker-reconciler",
+      "functionName": "reconcile"
     }
   }
 }
