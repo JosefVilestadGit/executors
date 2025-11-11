@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -364,8 +365,14 @@ func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
 		log.WithFields(log.Fields{"Error": err}).Warning("Failed to add reconcile function")
 	}
 
-	// Create reconciler
-	e.reconciler, err = reconciler.CreateReconciler(e.client, e.executorPrvKey)
+	// Get location from environment for child executors
+	location := os.Getenv("COLONIES_NODE_LOCATION")
+	if location == "" {
+		location = "default"
+	}
+
+	// Create reconciler with colony owner key for executor registration
+	e.reconciler, err = reconciler.CreateReconciler(e.client, e.executorPrvKey, e.colonyPrvKey, e.colonyName, location)
 	if err != nil {
 		return nil, err
 	}
@@ -408,7 +415,138 @@ func (e *Executor) Shutdown() error {
 	return nil
 }
 
+// reconcileStartupState checks all blueprints on startup and reconciles if needed
+func (e *Executor) reconcileStartupState() {
+	log.Info("Performing startup state reconciliation...")
+
+	// Fetch all ExecutorDeployment blueprints
+	blueprints, err := e.client.GetBlueprints(e.colonyName, "ExecutorDeployment", e.colonyPrvKey)
+	if err != nil {
+		log.WithFields(log.Fields{"Error": err}).Warn("Failed to fetch blueprints on startup")
+		return
+	}
+
+	if len(blueprints) == 0 {
+		log.Info("No blueprints found on startup")
+		return
+	}
+
+	log.WithFields(log.Fields{"Count": len(blueprints)}).Info("Checking blueprints on startup")
+
+	for _, blueprint := range blueprints {
+		// Check if this blueprint is managed by a docker-reconciler
+		if blueprint.Spec == nil {
+			continue
+		}
+
+		executorType, ok := blueprint.Spec["executorType"].(string)
+		if !ok || executorType != "docker-reconciler" {
+			continue
+		}
+
+		// Get current state from reconciler
+		status, err := e.reconciler.CollectStatus(blueprint)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"Error":         err,
+				"BlueprintName": blueprint.Metadata.Name,
+			}).Warn("Failed to collect status on startup")
+			continue
+		}
+
+		runningInstances, ok := status["runningInstances"].(int)
+		if !ok {
+			continue
+		}
+
+		// Get desired replicas
+		var desiredReplicas int
+		replicas, ok := blueprint.Spec["replicas"]
+		if !ok {
+			continue
+		}
+		switch v := replicas.(type) {
+		case int:
+			desiredReplicas = v
+		case float64:
+			desiredReplicas = int(v)
+		default:
+			continue
+		}
+
+		// Check if reconciliation is needed
+		needsReconciliation := false
+		reason := ""
+
+		if runningInstances != desiredReplicas {
+			needsReconciliation = true
+			reason = fmt.Sprintf("replica mismatch (running: %d, desired: %d)", runningInstances, desiredReplicas)
+		} else {
+			// Check generation labels
+			hasOldGeneration, err := e.reconciler.HasOldGenerationContainers(blueprint)
+			if err != nil {
+				log.WithFields(log.Fields{
+					"Error":         err,
+					"BlueprintName": blueprint.Metadata.Name,
+				}).Warn("Failed to check generation labels on startup")
+			} else if hasOldGeneration {
+				needsReconciliation = true
+				reason = "containers with old generation labels detected"
+			}
+		}
+
+		if needsReconciliation {
+			log.WithFields(log.Fields{
+				"BlueprintName": blueprint.Metadata.Name,
+				"Reason":        reason,
+				"Generation":    blueprint.Metadata.Generation,
+			}).Info("Startup reconciliation needed")
+
+			// Create a minimal process for reconciliation
+			reconciliation := &core.Reconciliation{
+				Action: "update",
+				New:    blueprint,
+				Old:    blueprint,
+			}
+
+			process := &core.Process{
+				ID: "startup-reconcile-" + blueprint.Metadata.Name,
+				FunctionSpec: core.FunctionSpec{
+					Reconciliation: reconciliation,
+				},
+			}
+
+			// Trigger reconciliation
+			if err := e.reconciler.Reconcile(process, blueprint); err != nil {
+				log.WithFields(log.Fields{
+					"Error":         err,
+					"BlueprintName": blueprint.Metadata.Name,
+				}).Error("Startup reconciliation failed")
+			} else {
+				log.WithFields(log.Fields{
+					"BlueprintName": blueprint.Metadata.Name,
+				}).Info("Startup reconciliation completed successfully")
+			}
+
+			// Track this blueprint
+			e.resourcesMutex.Lock()
+			e.managedResources[blueprint.ID] = blueprint
+			e.resourcesMutex.Unlock()
+		} else {
+			log.WithFields(log.Fields{
+				"BlueprintName": blueprint.Metadata.Name,
+				"Replicas":      desiredReplicas,
+			}).Info("Blueprint already at desired state")
+		}
+	}
+
+	log.Info("Startup state reconciliation completed")
+}
+
 func (e *Executor) ServeForEver() error {
+	// Perform startup reconciliation before entering main loop
+	e.reconcileStartupState()
+
 	for {
 		process, err := e.client.AssignWithContext(e.colonyName, 100, e.ctx, "", "", e.executorPrvKey)
 		if err != nil {
@@ -434,7 +572,7 @@ func (e *Executor) ServeForEver() error {
 
 		// Handle reconcile function
 		if process.FunctionSpec.FuncName == "reconcile" {
-			go e.handleReconcile(process)
+			e.handleReconcile(process)
 		} else {
 			log.WithFields(log.Fields{"FuncName": process.FunctionSpec.FuncName}).Error("Unsupported funcname")
 			err := e.client.Fail(process.ID, []string{"Unsupported funcname"}, e.executorPrvKey)
@@ -534,3 +672,5 @@ func (e *Executor) failProcess(process *core.Process, reason string) {
 		log.WithFields(log.Fields{"ProcessID": process.ID, "Error": err}).Error("Failed to mark process as failed")
 	}
 }
+
+// selfHealingLoop periodically checks all managed blueprints and triggers reconciliation if state drift is detected

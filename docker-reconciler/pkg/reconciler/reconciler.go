@@ -12,6 +12,7 @@ import (
 
 	"github.com/colonyos/colonies/pkg/client"
 	"github.com/colonyos/colonies/pkg/core"
+	"github.com/colonyos/colonies/pkg/security/crypto"
 	"github.com/colonyos/executors/common/pkg/docker"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -20,6 +21,15 @@ import (
 	"github.com/docker/go-connections/nat"
 	log "github.com/sirupsen/logrus"
 )
+
+// truncateID safely truncates a container ID to the specified length
+// If the ID is shorter than the length, returns the full ID
+func truncateID(id string, length int) string {
+	if len(id) <= length {
+		return id
+	}
+	return id[:length]
+}
 
 type DeploymentSpec struct {
 	Image        string                 `json:"image"`
@@ -111,9 +121,12 @@ type ResourcesSpec struct {
 
 type Reconciler struct {
 	dockerHandler  *docker.DockerHandler
-	dockerClient   *dockerclient.Client
+	dockerClient   DockerClient // Now uses interface for testability
 	client         *client.ColoniesClient
 	executorPrvKey string
+	colonyOwnerKey string
+	colonyName     string
+	location       string
 }
 
 // getNodeEnvVars returns environment variables with node metadata for containers
@@ -138,7 +151,7 @@ func getNodeEnvVars() []string {
 	return envVars
 }
 
-func CreateReconciler(client *client.ColoniesClient, executorPrvKey string) (*Reconciler, error) {
+func CreateReconciler(client *client.ColoniesClient, executorPrvKey, colonyOwnerKey, colonyName, location string) (*Reconciler, error) {
 	dockerHandler, err := docker.CreateDockerHandler()
 	if err != nil {
 		return nil, err
@@ -154,6 +167,9 @@ func CreateReconciler(client *client.ColoniesClient, executorPrvKey string) (*Re
 		dockerClient:   dockerCli,
 		client:         client,
 		executorPrvKey: executorPrvKey,
+		colonyOwnerKey: colonyOwnerKey,
+		colonyName:     colonyName,
+		location:       location,
 	}, nil
 }
 
@@ -350,16 +366,77 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, blueprin
 		containersToStop := currentReplicas - spec.Replicas
 		r.addLog(process, fmt.Sprintf("Scaling down: stopping %d container(s)", containersToStop))
 
-		for i := 0; i < containersToStop && i < len(existingContainers); i++ {
-			containerID := existingContainers[i]
-			if err := r.stopContainer(containerID); err != nil {
-				r.addLog(process, fmt.Sprintf("Warning: Failed to stop container %s: %v", containerID, err))
+		// Get full container info to get names for deregistration
+		ctx := context.Background()
+		filterArgs := filters.NewArgs()
+		filterArgs.Add("label", "colonies.deployment="+blueprint.Metadata.Name)
+		containers, err := r.dockerClient.ContainerList(ctx, container.ListOptions{
+			All:     false,
+			Filters: filterArgs,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to list containers for scale down: %w", err)
+		}
+
+		for i := 0; i < containersToStop && i < len(containers); i++ {
+			cont := containers[i]
+			containerID := cont.ID
+
+			// Get container name (remove leading slash if present)
+			containerName := ""
+			if len(cont.Names) > 0 {
+				containerName = cont.Names[0]
+				if len(containerName) > 0 && containerName[0] == '/' {
+					containerName = containerName[1:]
+				}
+			}
+
+			// Deregister executor BEFORE stopping container (if it's an ExecutorDeployment)
+			if blueprint.Kind == "ExecutorDeployment" && containerName != "" {
+				log.WithFields(log.Fields{
+					"ExecutorName": containerName,
+					"ContainerID":  truncateID(containerID, 12),
+				}).Info("Deregistering executor before stopping container")
+
+				if err := r.client.RemoveExecutor(r.colonyName, containerName, r.colonyOwnerKey); err != nil {
+					log.WithFields(log.Fields{
+						"Error":        err,
+						"ExecutorName": containerName,
+					}).Warn("Failed to deregister executor")
+					r.addLog(process, fmt.Sprintf("Warning: Failed to deregister executor %s: %v", containerName, err))
+					// Continue anyway to stop the container
+				} else {
+					r.addLog(process, fmt.Sprintf("Deregistered executor: %s", containerName))
+				}
+			}
+
+			// Now stop and remove the container
+			if err := r.stopAndRemoveContainer(containerID); err != nil {
+				r.addLog(process, fmt.Sprintf("Warning: Failed to stop container %s: %v", truncateID(containerID, 12), err))
 			} else {
-				r.addLog(process, fmt.Sprintf("Stopped container: %s", containerID))
+				r.addLog(process, fmt.Sprintf("Stopped and removed container: %s", containerName))
 			}
 		}
 	} else {
 		r.addLog(process, "Deployment is at desired state")
+	}
+
+	// Cleanup old generation containers first (safety net for rapid updates)
+	if err := r.CleanupOldGenerationContainers(blueprint); err != nil {
+		log.WithFields(log.Fields{"Error": err}).Warn("Failed to cleanup old generation containers")
+		r.addLog(process, fmt.Sprintf("Warning: Failed to cleanup old generation containers: %v", err))
+	}
+
+	// Cleanup stopped containers and stale executor registrations
+	r.addLog(process, "Running cleanup of stopped containers and stale executors...")
+	if err := r.CleanupStoppedContainers(); err != nil {
+		log.WithFields(log.Fields{"Error": err}).Warn("Failed to cleanup stopped containers")
+		r.addLog(process, fmt.Sprintf("Warning: Failed to cleanup stopped containers: %v", err))
+	}
+
+	if err := r.CleanupStaleExecutors(blueprint.Metadata.Name, spec.ExecutorType); err != nil {
+		log.WithFields(log.Fields{"Error": err}).Warn("Failed to cleanup stale executors")
+		r.addLog(process, fmt.Sprintf("Warning: Failed to cleanup stale executors: %v", err))
 	}
 
 	r.addLog(process, "Reconciliation completed successfully")
@@ -488,6 +565,13 @@ func (r *Reconciler) reconcileDockerDeployment(process *core.Process, blueprint 
 		}
 	}
 
+	// Cleanup stopped containers (don't cleanup stale executors for DockerDeployment as they might not be executors)
+	r.addLog(process, "Running cleanup of stopped containers...")
+	if err := r.CleanupStoppedContainers(); err != nil {
+		log.WithFields(log.Fields{"Error": err}).Warn("Failed to cleanup stopped containers")
+		r.addLog(process, fmt.Sprintf("Warning: Failed to cleanup stopped containers: %v", err))
+	}
+
 	r.addLog(process, "Docker deployment reconciliation completed successfully")
 	return nil
 }
@@ -526,7 +610,7 @@ func (r *Reconciler) CollectStatus(blueprint *core.Blueprint) (map[string]interf
 		}
 
 		instances = append(instances, map[string]interface{}{
-			"id":        inspect.ID[:12], // Short ID
+			"id":        truncateID(inspect.ID, 12), // Short ID
 			"name":      containerName,
 			"type":      "container",
 			"state":     state,
@@ -583,6 +667,38 @@ func (r *Reconciler) pullImage(process *core.Process, image string) error {
 	}
 }
 
+// waitForContainerRunning waits for a container to reach running state
+// Returns error if container doesn't start within timeout
+func (r *Reconciler) waitForContainerRunning(containerID string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for container %s to start", truncateID(containerID, 12))
+		case <-ticker.C:
+			inspect, err := r.dockerClient.ContainerInspect(context.Background(), containerID)
+			if err != nil {
+				return fmt.Errorf("failed to inspect container %s: %w", truncateID(containerID, 12), err)
+			}
+
+			if inspect.State.Running {
+				return nil
+			}
+
+			// Check if container exited with error
+			if inspect.State.Status == "exited" || inspect.State.Status == "dead" {
+				return fmt.Errorf("container %s failed to start, status: %s, exit code: %d",
+					truncateID(containerID, 12), inspect.State.Status, inspect.State.ExitCode)
+			}
+		}
+	}
+}
+
 func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, containerName string, blueprint *core.Blueprint) error {
 	ctx := context.Background()
 
@@ -624,10 +740,56 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 	envVars = append(envVars, "COLONIES_DEPLOYMENT="+blueprint.Metadata.Name)
 	envVars = append(envVars, "COLONIES_CONTAINER_NAME="+containerName)
 
-	// If this is a colony executor deployment, use the container name as executor name
+	// If this is a colony executor deployment, generate keys and register executor
 	// (the container name is now the unique executor name generated in Reconcile())
 	if blueprint.Kind == "ExecutorDeployment" {
+		// Generate unique keypair for this executor
+		cryptoInstance := crypto.CreateCrypto()
+		executorPrvKey, err := cryptoInstance.GeneratePrivateKey()
+		if err != nil {
+			return fmt.Errorf("failed to generate executor private key: %w", err)
+		}
+
+		// Generate executor ID from private key
+		executorID, err := cryptoInstance.GenerateID(executorPrvKey)
+		if err != nil {
+			return fmt.Errorf("failed to generate executor ID: %w", err)
+		}
+
+		// Register executor with Colonies server using colony owner privileges
+		// Use EXECUTOR_TYPE from env vars (not spec.ExecutorType which is for reconciler matching)
+		executorType, ok := spec.Env["EXECUTOR_TYPE"].(string)
+		if !ok || executorType == "" {
+			executorType = "container-executor" // default
+		}
+		executor := core.CreateExecutor(executorID, executorType, containerName, r.colonyName, time.Now(), time.Now())
+
+		// Set location from reconciler (inherits from parent)
+		executor.Location = core.Location{Description: r.location}
+
+		addedExecutor, err := r.client.AddExecutor(executor, r.colonyOwnerKey)
+		if err != nil {
+			return fmt.Errorf("failed to register executor %s: %w", containerName, err)
+		}
+
+		// Auto-approve the executor (reconciler has colony owner privileges)
+		err = r.client.ApproveExecutor(r.colonyName, containerName, r.colonyOwnerKey)
+		if err != nil {
+			return fmt.Errorf("failed to approve executor %s: %w", containerName, err)
+		}
+
+		log.WithFields(log.Fields{
+			"BlueprintName": blueprint.Metadata.Name,
+			"ExecutorName":  containerName,
+			"ExecutorID":    addedExecutor.ID,
+			"ExecutorType":  executorType,
+		}).Info("Generated and registered executor with Colonies server")
+		r.addLog(process, fmt.Sprintf("Registered executor: %s (ID: %s)", containerName, addedExecutor.ID))
+
+		// Inject the generated private key and executor ID into container environment
+		envVars = append(envVars, "COLONIES_PRVKEY="+executorPrvKey)
 		envVars = append(envVars, "COLONIES_EXECUTOR_NAME="+containerName)
+		envVars = append(envVars, "COLONIES_EXECUTOR_ID="+executorID)
 
 		// Add node metadata environment variables for executor registration
 		nodeEnvVars := getNodeEnvVars()
@@ -736,11 +898,16 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 		return fmt.Errorf("failed to start container: %w", err)
 	}
 
+	// Wait for container to be running (with 30 second timeout)
+	if err := r.waitForContainerRunning(resp.ID, 30*time.Second); err != nil {
+		return fmt.Errorf("container failed to start: %w", err)
+	}
+
 	log.WithFields(log.Fields{
 		"ContainerID":   resp.ID,
 		"ContainerName": containerName,
 		"Image":         spec.Image,
-	}).Info("Container started")
+	}).Info("Container started and running")
 
 	return nil
 }
@@ -890,11 +1057,16 @@ func (r *Reconciler) startDockerDeploymentInstance(process *core.Process, instan
 		return fmt.Errorf("failed to start container: %w", err)
 	}
 
+	// Wait for container to be running (with 30 second timeout)
+	if err := r.waitForContainerRunning(resp.ID, 30*time.Second); err != nil {
+		return fmt.Errorf("container failed to start: %w", err)
+	}
+
 	log.WithFields(log.Fields{
 		"ContainerID":   resp.ID,
 		"ContainerName": containerName,
 		"Image":         instance.Image,
-	}).Info("Docker deployment instance started")
+	}).Info("Docker deployment instance started and running")
 
 	return nil
 }
@@ -1010,4 +1182,258 @@ func (r *Reconciler) GetDeploymentStatus(deploymentName string) (map[string]inte
 	}
 
 	return status, nil
+}
+
+// CleanupStoppedContainers removes all stopped/exited containers managed by the reconciler
+// HasOldGenerationContainers checks if any containers have old generation labels
+func (r *Reconciler) HasOldGenerationContainers(blueprint *core.Blueprint) (bool, error) {
+	ctx := context.Background()
+	currentGeneration := blueprint.Metadata.Generation
+
+	// List ALL containers for this deployment
+	filterArgs := filters.NewArgs()
+	filterArgs.Add("label", "colonies.deployment="+blueprint.Metadata.Name)
+
+	containers, err := r.dockerClient.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filterArgs,
+	})
+
+	if err != nil {
+		return false, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	for _, cont := range containers {
+		generationStr, hasLabel := cont.Labels["colonies.generation"]
+		if !hasLabel {
+			// Container without generation label - consider it old
+			return true, nil
+		}
+
+		var generation int64
+		if _, err := fmt.Sscanf(generationStr, "%d", &generation); err != nil {
+			// Unparseable generation - consider it old
+			return true, nil
+		}
+
+		if generation < currentGeneration {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// CleanupOldGenerationContainers removes containers from old generations as a safety net
+// This handles orphaned containers that might have been created during rapid blueprint updates
+func (r *Reconciler) CleanupOldGenerationContainers(blueprint *core.Blueprint) error {
+	ctx := context.Background()
+	currentGeneration := blueprint.Metadata.Generation
+
+	// List ALL containers for this deployment (including stopped)
+	filterArgs := filters.NewArgs()
+	filterArgs.Add("label", "colonies.deployment="+blueprint.Metadata.Name)
+
+	containers, err := r.dockerClient.ContainerList(ctx, container.ListOptions{
+		All:     true, // Include stopped containers
+		Filters: filterArgs,
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to list containers for generation cleanup: %w", err)
+	}
+
+	removedCount := 0
+	for _, cont := range containers {
+		// Check generation label
+		generationStr, hasLabel := cont.Labels["colonies.generation"]
+		if !hasLabel {
+			// Old container without generation label - skip for safety
+			continue
+		}
+
+		// Parse generation
+		var generation int64
+		if _, err := fmt.Sscanf(generationStr, "%d", &generation); err != nil {
+			log.WithFields(log.Fields{
+				"ContainerID":    truncateID(cont.ID, 12),
+				"GenerationStr":  generationStr,
+				"Error":          err,
+			}).Warn("Failed to parse generation label")
+			continue
+		}
+
+		// Remove containers from old generations
+		if generation < currentGeneration {
+			// Get container name for executor deregistration
+			containerName := ""
+			if len(cont.Names) > 0 {
+				containerName = cont.Names[0]
+				if len(containerName) > 0 && containerName[0] == '/' {
+					containerName = containerName[1:]
+				}
+			}
+
+			log.WithFields(log.Fields{
+				"ContainerID":       truncateID(cont.ID, 12),
+				"ContainerName":     containerName,
+				"OldGeneration":     generation,
+				"CurrentGeneration": currentGeneration,
+				"State":             cont.State,
+			}).Info("Removing old generation container")
+
+			// Deregister executor if it's an ExecutorDeployment
+			if blueprint.Kind == "ExecutorDeployment" && containerName != "" {
+				if err := r.client.RemoveExecutor(r.colonyName, containerName, r.colonyOwnerKey); err != nil {
+					log.WithFields(log.Fields{
+						"Error":        err,
+						"ExecutorName": containerName,
+					}).Debug("Failed to deregister executor (may already be removed)")
+					// Continue anyway - executor might already be deregistered
+				}
+			}
+
+			// Remove the container
+			if err := r.dockerClient.ContainerRemove(ctx, cont.ID, container.RemoveOptions{Force: true}); err != nil {
+				log.WithFields(log.Fields{
+					"Error":       err,
+					"ContainerID": truncateID(cont.ID, 12),
+				}).Warn("Failed to remove old generation container")
+			} else {
+				removedCount++
+			}
+		}
+	}
+
+	if removedCount > 0 {
+		log.WithFields(log.Fields{
+			"Count":             removedCount,
+			"BlueprintName":     blueprint.Metadata.Name,
+			"CurrentGeneration": currentGeneration,
+		}).Info("Cleaned up old generation containers")
+	}
+
+	return nil
+}
+
+func (r *Reconciler) CleanupStoppedContainers() error {
+	ctx := context.Background()
+
+	// List ALL containers (including stopped) with the managed label
+	filterArgs := filters.NewArgs()
+	filterArgs.Add("label", "colonies.managed=true")
+
+	containers, err := r.dockerClient.ContainerList(ctx, container.ListOptions{
+		All:     true, // Include stopped containers
+		Filters: filterArgs,
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to list managed containers: %w", err)
+	}
+
+	stoppedCount := 0
+	for _, cont := range containers {
+		// Check if container is not running
+		if cont.State != "running" {
+			deploymentName := cont.Labels["colonies.deployment"]
+			log.WithFields(log.Fields{
+				"ContainerID":   truncateID(cont.ID, 12),
+				"ContainerName": cont.Names[0],
+				"State":         cont.State,
+				"Deployment":    deploymentName,
+			}).Info("Removing stopped container")
+
+			// Remove the container
+			if err := r.dockerClient.ContainerRemove(ctx, cont.ID, container.RemoveOptions{Force: true}); err != nil {
+				log.WithFields(log.Fields{
+					"Error":       err,
+					"ContainerID": truncateID(cont.ID, 12),
+				}).Warn("Failed to remove stopped container")
+				continue
+			}
+			stoppedCount++
+		}
+	}
+
+	if stoppedCount > 0 {
+		log.WithFields(log.Fields{"Count": stoppedCount}).Info("Cleaned up stopped containers")
+	}
+
+	return nil
+}
+
+// CleanupStaleExecutors removes executor registrations for containers that no longer exist
+func (r *Reconciler) CleanupStaleExecutors(deploymentName string, executorType string) error {
+	// Get all executors of the given type
+	executors, err := r.client.GetExecutors(r.colonyName, r.colonyOwnerKey)
+	if err != nil {
+		return fmt.Errorf("failed to list executors: %w", err)
+	}
+
+	// Get all managed containers (running only)
+	ctx := context.Background()
+	filterArgs := filters.NewArgs()
+	filterArgs.Add("label", "colonies.managed=true")
+	if deploymentName != "" {
+		filterArgs.Add("label", "colonies.deployment="+deploymentName)
+	}
+
+	containers, err := r.dockerClient.ContainerList(ctx, container.ListOptions{
+		All:     false, // Only running containers
+		Filters: filterArgs,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	// Build a set of container names for quick lookup
+	containerNames := make(map[string]bool)
+	for _, cont := range containers {
+		// Container names from Docker API have a leading slash
+		name := cont.Names[0]
+		if len(name) > 0 && name[0] == '/' {
+			name = name[1:]
+		}
+		containerNames[name] = true
+	}
+
+	// Check each executor and remove if container doesn't exist
+	removedCount := 0
+	for _, executor := range executors {
+		// Only check executors of the specified type
+		if executorType != "" && executor.Type != executorType {
+			continue
+		}
+
+		// Check if executor name matches pattern (starts with deployment name)
+		if deploymentName != "" && !strings.HasPrefix(executor.Name, deploymentName+"-") {
+			continue
+		}
+
+		// Check if container exists for this executor
+		if !containerNames[executor.Name] {
+			log.WithFields(log.Fields{
+				"ExecutorName": executor.Name,
+				"ExecutorID":   executor.ID,
+				"ExecutorType": executor.Type,
+			}).Info("Removing stale executor registration (container not found)")
+
+			// Remove the executor registration
+			if err := r.client.RemoveExecutor(r.colonyName, executor.Name, r.colonyOwnerKey); err != nil {
+				log.WithFields(log.Fields{
+					"Error":      err,
+					"ExecutorID": executor.ID,
+				}).Warn("Failed to remove stale executor")
+				continue
+			}
+			removedCount++
+		}
+	}
+
+	if removedCount > 0 {
+		log.WithFields(log.Fields{"Count": removedCount}).Info("Cleaned up stale executor registrations")
+	}
+
+	return nil
 }

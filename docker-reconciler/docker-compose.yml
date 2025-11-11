@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # Additional docker reconciler node (node1 is already in colonies docker-compose)
   docker-reconciler-edge:
-    image: colonyos/docker-reconciler:v1.0.2
+    image: colonyos/docker-reconciler:latest
     container_name: docker-reconciler-edge
     restart: unless-stopped
     volumes:

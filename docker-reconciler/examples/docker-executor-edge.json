@@ -6,7 +6,7 @@
   "spec": {
     "image": "colonyos/dockerexecutor:v1.0.7",
     "replicas": 1,
-    "executorType": "docker-reconciler",
+    "executorType": "docker-executor-reconciler",
     "executorName": "docker-reconciler-edge",
     "env": {
       "LANG": "en_US.UTF-8",
@@ -23,7 +23,6 @@
       "COLONIES_SERVER_TLS": "false",
       "COLONIES_TLS": "false",
       "COLONIES_COLONY_NAME": "dev",
-      "COLONIES_COLONY_PRVKEY": "ba949fa134981372d6da62b6a56f336ab4d843b22c02a4257dcf7d0d73097514",
       "AWS_S3_TLS": "false",
       "AWS_S3_SKIPVERIFY": "false",
       "AWS_S3_ENDPOINT": "minio:9000",
