@@ -94,25 +94,37 @@ var executorPrvKey string
 var executorType string
 
 func parseEnv() {
-	coloniesServerHost = os.Getenv("COLONIES_SERVER_HOST")
+	// Support both new (COLONIES_CLIENT_HTTP_HOST) and old (COLONIES_SERVER_HOST) naming
+	coloniesServerHost = os.Getenv("COLONIES_CLIENT_HTTP_HOST")
 	if coloniesServerHost == "" {
-		log.Error("COLONIES_SERVER_HOST environment variable not set")
+		coloniesServerHost = os.Getenv("COLONIES_SERVER_HOST")
+	}
+	if coloniesServerHost == "" {
+		log.Error("COLONIES_CLIENT_HTTP_HOST or COLONIES_SERVER_HOST environment variable not set")
 		os.Exit(-1)
 	}
 
-	coloniesServerPortStr := os.Getenv("COLONIES_SERVER_PORT")
+	// Support both new (COLONIES_CLIENT_HTTP_PORT) and old (COLONIES_SERVER_PORT) naming
+	coloniesServerPortStr := os.Getenv("COLONIES_CLIENT_HTTP_PORT")
+	if coloniesServerPortStr == "" {
+		coloniesServerPortStr = os.Getenv("COLONIES_SERVER_PORT")
+	}
 	if coloniesServerPortStr == "" {
 		coloniesServerPort = 443
 	} else {
 		var err error
 		coloniesServerPort, err = strconv.Atoi(coloniesServerPortStr)
 		if err != nil {
-			log.WithFields(log.Fields{"Error": err}).Error("Failed to parse COLONIES_SERVER_PORT")
+			log.WithFields(log.Fields{"Error": err}).Error("Failed to parse COLONIES_CLIENT_HTTP_PORT/COLONIES_SERVER_PORT")
 			os.Exit(-1)
 		}
 	}
 
-	coloniesInsecureStr := os.Getenv("COLONIES_INSECURE")
+	// Support both new (COLONIES_CLIENT_HTTP_INSECURE) and old (COLONIES_INSECURE) naming
+	coloniesInsecureStr := os.Getenv("COLONIES_CLIENT_HTTP_INSECURE")
+	if coloniesInsecureStr == "" {
+		coloniesInsecureStr = os.Getenv("COLONIES_INSECURE")
+	}
 	if coloniesInsecureStr == "true" {
 		coloniesInsecure = true
 	} else {

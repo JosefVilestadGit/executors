@@ -29,10 +29,28 @@ fi
 echo "Checking if DockerDeployment definition is registered..."
 if ! colonies blueprint definition get --name docker-deployment 2>/dev/null; then
     echo "Registering DockerDeployment blueprint definition..."
-    echo "NOTE: This requires colony owner privileges. Please run with COLONIES_PRVKEY set to colony private key:"
-    echo "  export COLONIES_PRVKEY=\${COLONIES_COLONY_PRVKEY}"
-    echo "  $0"
-    exit 1
+
+    # Check if we have colony owner privileges
+    if [ -z "$COLONIES_COLONY_PRVKEY" ]; then
+        echo "ERROR: COLONIES_COLONY_PRVKEY not set. Cannot register blueprint definition."
+        echo "Please source docker-compose.env or set COLONIES_COLONY_PRVKEY manually."
+        exit 1
+    fi
+
+    # Temporarily use colony owner key to register definition
+    SAVED_PRVKEY="$COLONIES_PRVKEY"
+    export COLONIES_PRVKEY="$COLONIES_COLONY_PRVKEY"
+
+    colonies blueprint definition add --spec ../docker-deployment-definition.json
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Failed to register DockerDeployment definition"
+        export COLONIES_PRVKEY="$SAVED_PRVKEY"
+        exit 1
+    fi
+
+    # Restore original key
+    export COLONIES_PRVKEY="$SAVED_PRVKEY"
+    echo "DockerDeployment definition registered successfully"
 else
     echo "DockerDeployment definition already registered"
 fi

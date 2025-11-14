@@ -401,6 +401,30 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, blueprin
 				containerName = containerName[1:]
 			}
 
+			// With generation-based naming, the old executor needs to be deregistered
+			// because the new container will have a different executor name (with new generation number)
+
+			// Extract the old executor name from the container's environment
+			containerInfo, err := r.dockerClient.ContainerInspect(context.Background(), containerID)
+			if err == nil {
+				oldExecutorName := ""
+				for _, env := range containerInfo.Config.Env {
+					if strings.HasPrefix(env, "COLONIES_EXECUTOR_NAME=") {
+						oldExecutorName = strings.TrimPrefix(env, "COLONIES_EXECUTOR_NAME=")
+						break
+					}
+				}
+
+				if oldExecutorName != "" {
+					r.addLog(process, fmt.Sprintf("Deregistering old executor: %s", oldExecutorName))
+					if err := r.client.RemoveExecutor(r.colonyName, oldExecutorName, r.colonyOwnerKey); err != nil {
+						r.addLog(process, fmt.Sprintf("Warning: Failed to deregister executor %s: %v", oldExecutorName, err))
+					} else {
+						r.addLog(process, fmt.Sprintf("Deregistered executor: %s", oldExecutorName))
+					}
+				}
+			}
+
 			// Stop and remove the dirty container
 			r.addLog(process, fmt.Sprintf("Removing dirty container: %s (generation mismatch)", containerName))
 			if err := r.stopAndRemoveContainer(containerID); err != nil {
@@ -487,20 +511,23 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, blueprin
 
 			// Deregister executor BEFORE stopping container (if it's an ExecutorDeployment)
 			if blueprint.Kind == "ExecutorDeployment" && containerName != "" {
+				// Executor name includes generation suffix (e.g., "docker-executor-abc-5")
+				executorName := fmt.Sprintf("%s-%d", containerName, blueprint.Metadata.Generation)
+
 				log.WithFields(log.Fields{
-					"ExecutorName": containerName,
+					"ExecutorName": executorName,
 					"ContainerID":  truncateID(containerID, 12),
 				}).Info("Deregistering executor before stopping container")
 
-				if err := r.client.RemoveExecutor(r.colonyName, containerName, r.colonyOwnerKey); err != nil {
+				if err := r.client.RemoveExecutor(r.colonyName, executorName, r.colonyOwnerKey); err != nil {
 					log.WithFields(log.Fields{
 						"Error":        err,
-						"ExecutorName": containerName,
+						"ExecutorName": executorName,
 					}).Warn("Failed to deregister executor")
-					r.addLog(process, fmt.Sprintf("Warning: Failed to deregister executor %s: %v", containerName, err))
+					r.addLog(process, fmt.Sprintf("Warning: Failed to deregister executor %s: %v", executorName, err))
 					// Continue anyway to stop the container
 				} else {
-					r.addLog(process, fmt.Sprintf("Deregistered executor: %s", containerName))
+					r.addLog(process, fmt.Sprintf("Deregistered executor: %s", executorName))
 				}
 			}
 
@@ -874,7 +901,9 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 
 		// Register executor with Colonies server using colony owner privileges
 		// executorType was already determined above from spec.ExecutorType
-		executor := core.CreateExecutor(executorID, executorType, containerName, r.colonyName, time.Now(), time.Now())
+		// Append generation number to executor name for unique identification across generations
+		executorName := fmt.Sprintf("%s-%d", containerName, blueprint.Metadata.Generation)
+		executor := core.CreateExecutor(executorID, executorType, executorName, r.colonyName, time.Now(), time.Now())
 
 		// Set location from reconciler (inherits from parent)
 		executor.Location = core.Location{Description: r.location}
@@ -885,22 +914,23 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 		}
 
 		// Auto-approve the executor (reconciler has colony owner privileges)
-		err = r.client.ApproveExecutor(r.colonyName, containerName, r.colonyOwnerKey)
+		err = r.client.ApproveExecutor(r.colonyName, executorName, r.colonyOwnerKey)
 		if err != nil {
 			return fmt.Errorf("failed to approve executor %s: %w", containerName, err)
 		}
 
 		log.WithFields(log.Fields{
 			"BlueprintName": blueprint.Metadata.Name,
-			"ExecutorName":  containerName,
+			"ExecutorName":  executorName,
 			"ExecutorID":    addedExecutor.ID,
 			"ExecutorType":  executorType,
 		}).Info("Generated and registered executor with Colonies server")
-		r.addLog(process, fmt.Sprintf("Registered executor: %s (ID: %s)", containerName, addedExecutor.ID))
+		r.addLog(process, fmt.Sprintf("Registered executor: %s (ID: %s)", executorName, addedExecutor.ID))
 
 		// Inject the generated private key and executor ID into container environment
 		envVars = append(envVars, "COLONIES_PRVKEY="+executorPrvKey)
-		envVars = append(envVars, "COLONIES_EXECUTOR_NAME="+containerName)
+		// Append generation number to executor name for unique identification across generations
+		envVars = append(envVars, "COLONIES_EXECUTOR_NAME="+executorName)
 		envVars = append(envVars, "COLONIES_EXECUTOR_ID="+executorID)
 
 		// Add node metadata environment variables for executor registration
@@ -909,10 +939,10 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 
 		log.WithFields(log.Fields{
 			"BlueprintName":   blueprint.Metadata.Name,
-			"ExecutorName":    containerName,
+			"ExecutorName":    executorName,
 			"ContainerName":   containerName,
-		}).Info("Using container name as executor name")
-		r.addLog(process, fmt.Sprintf("Executor name: %s", containerName))
+		}).Info("Using container name with generation suffix as executor name")
+		r.addLog(process, fmt.Sprintf("Executor name: %s (generation %d)", executorName, blueprint.Metadata.Generation))
 	}
 
 	// Create container config
