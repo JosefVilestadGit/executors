@@ -19,10 +19,15 @@ type Executor struct {
 	coloniesServerHost string
 	coloniesServerPort int
 	coloniesInsecure   bool
-	colonyID           string
 	colonyPrvKey       string
+	colonyID           string
+	colonyName         string
 	executorID         string
 	executorPrvKey     string
+	executorName       string
+	long               float64
+	lat                float64
+	locDesc            string
 	ctx                context.Context
 	cancel             context.CancelFunc
 	client             *client.ColoniesClient
@@ -48,9 +53,9 @@ func WithColoniesInsecure(insecure bool) ExecutorOption {
 	}
 }
 
-func WithColonyID(id string) ExecutorOption {
+func WithColonyName(name string) ExecutorOption {
 	return func(e *Executor) {
-		e.colonyID = id
+		e.colonyName = name
 	}
 }
 
@@ -60,9 +65,21 @@ func WithColonyPrvKey(prvkey string) ExecutorOption {
 	}
 }
 
+func WithColonyID(id string) ExecutorOption {
+	return func(e *Executor) {
+		e.colonyID = id
+	}
+}
+
 func WithExecutorID(id string) ExecutorOption {
 	return func(e *Executor) {
 		e.executorID = id
+	}
+}
+
+func WithExecutorName(name string) ExecutorOption {
+	return func(e *Executor) {
+		e.executorName = name
 	}
 }
 
@@ -72,7 +89,25 @@ func WithExecutorPrvKey(key string) ExecutorOption {
 	}
 }
 
-func createExecutorWithKey(colonyID string) (*core.Executor, string, string, error) {
+func WithLong(long float64) ExecutorOption {
+	return func(e *Executor) {
+		e.long = long
+	}
+}
+
+func WithLat(lat float64) ExecutorOption {
+	return func(e *Executor) {
+		e.lat = lat
+	}
+}
+
+func WithLocDesc(locDesc string) ExecutorOption {
+	return func(e *Executor) {
+		e.locDesc = locDesc
+	}
+}
+
+func (e *Executor) createExecutorWithKey(colonyName string) (*core.Executor, string, string, error) {
 	crypto := crypto.CreateCrypto()
 	executorPrvKey, err := crypto.GeneratePrivateKey()
 	if err != nil {
@@ -84,7 +119,12 @@ func createExecutorWithKey(colonyID string) (*core.Executor, string, string, err
 		return nil, "", "", err
 	}
 
-	return core.CreateExecutor(executorID, "sleep", core.GenerateRandomID(), colonyID, time.Now(), time.Now()), executorID, executorPrvKey, nil
+	executor := core.CreateExecutor(executorID, "sleep-executor", e.executorName, colonyName, time.Now(), time.Now())
+	executor.Location.Description = e.locDesc
+	executor.Location.Long = e.long
+	executor.Location.Lat = e.lat
+
+	return executor, executorID, executorPrvKey, nil
 }
 
 func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
@@ -108,7 +148,7 @@ func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
 	e.client = client.CreateColoniesClient(e.coloniesServerHost, e.coloniesServerPort, e.coloniesInsecure, false)
 
 	if e.colonyPrvKey != "" {
-		spec, executorID, executorPrvKey, err := createExecutorWithKey(e.colonyID)
+		spec, executorID, executorPrvKey, err := e.createExecutorWithKey(e.colonyName)
 		if err != nil {
 			return nil, err
 		}
@@ -119,26 +159,25 @@ func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
 		if err != nil {
 			return nil, err
 		}
-		err = e.client.ApproveExecutor(e.executorID, e.colonyPrvKey)
+		err = e.client.ApproveExecutor(e.colonyName, e.executorName, e.colonyPrvKey)
 		if err != nil {
 			return nil, err
 		}
 
-		function := &core.Function{ExecutorID: e.executorID, ColonyID: e.colonyID, FuncName: "sleep", Desc: "Sleep executor", Args: []string{"sleeptime::string"}}
+		function := &core.Function{ExecutorName: e.executorName, ColonyName: e.colonyName, FuncName: "sleep"}
 
 		_, err = e.client.AddFunction(function, e.executorPrvKey)
 		log.WithFields(log.Fields{"ExecutorID": e.executorID}).Info("Self-registered")
 	}
-
 	return e, nil
 }
 
 func (e *Executor) Shutdown() error {
 	log.Info("Shutting down")
 	if e.colonyPrvKey != "" {
-		err := e.client.DeleteExecutor(e.executorID, e.colonyPrvKey)
+		err := e.client.RemoveExecutor(e.colonyName, e.executorName, e.colonyPrvKey)
 		if err != nil {
-			log.WithFields(log.Fields{"ExecutorID": e.executorID}).Warning("Failed to deregistered")
+			log.WithFields(log.Fields{"ExecutorID": e.executorID}).Warning("Failed to deregister")
 		}
 
 		log.WithFields(log.Fields{"ExecutorID": e.executorID}).Info("Deregistered")
@@ -149,7 +188,7 @@ func (e *Executor) Shutdown() error {
 
 func (e *Executor) ServeForEver() error {
 	for {
-		process, err := e.client.AssignWithContext(e.colonyID, 100, e.ctx, e.executorPrvKey)
+		process, err := e.client.AssignWithContext(e.colonyName, 100, e.ctx, "1000m", "8000Mi", e.executorPrvKey)
 		if err != nil {
 			var coloniesError *core.ColoniesError
 			if errors.As(err, &coloniesError) {

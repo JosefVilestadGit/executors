@@ -32,20 +32,31 @@ var startCmd = &cobra.Command{
 			"ColoniesServerHost": ColoniesServerHost,
 			"ColoniesServerPort": ColoniesServerPort,
 			"ColoniesInsecure":   ColoniesInsecure,
-			"ColonyId":           ColonyID,
+			"ColonyName":         ColonyName,
+			"ColonyID":           ColonyID,
 			"ColonyPrvKey":       "***********************",
 			"ExecutorId":         ExecutorID,
-			"ExecutorPrvKey":     "***********************"}).
+			"ExecutorName":       ExecutorName,
+			"ExecutorPrvKey":     "***********************",
+			"Longitude":          Long,
+			"Latitude":           Lat,
+			"LocationDesc":       LocDesc,
+		}).
 			Info("Starting a Colonies Sleep Executor")
 
 		executor, err := executor.CreateExecutor(
 			executor.WithColoniesServerHost(ColoniesServerHost),
 			executor.WithColoniesServerPort(ColoniesServerPort),
 			executor.WithColoniesInsecure(ColoniesInsecure),
-			executor.WithColonyID(ColonyID),
 			executor.WithColonyPrvKey(ColonyPrvKey),
+			executor.WithColonyID(ColonyID),
+			executor.WithColonyName(ColonyName),
 			executor.WithExecutorID(ExecutorID),
+			executor.WithExecutorName(ExecutorName),
 			executor.WithExecutorPrvKey(ExecutorPrvKey),
+			executor.WithLong(Long),
+			executor.WithLat(Lat),
+			executor.WithLocDesc(LocDesc),
 		)
 		CheckError(err)
 
@@ -94,6 +105,10 @@ func parseEnv() {
 		ColonyPrvKey = os.Getenv("COLONIES_COLONY_PRVKEY")
 	}
 
+	if ColonyName == "" {
+		ColonyName = os.Getenv("COLONIES_COLONY_NAME")
+	}
+
 	if ExecutorID == "" {
 		ExecutorID = os.Getenv("COLONIES_EXECUTOR_ID")
 	}
@@ -101,6 +116,9 @@ func parseEnv() {
 		CheckError(errors.New("Unknown Executor Id"))
 	}
 
+	if ExecutorName == "" {
+		ExecutorName = os.Getenv("COLONIES_EXECUTOR_NAME")
+	}
 	keychain, err := security.CreateKeychain(KEYCHAIN_PATH)
 	CheckError(err)
 
@@ -110,6 +128,20 @@ func parseEnv() {
 	if ExecutorPrvKey == "" {
 		ExecutorPrvKey, err = keychain.GetPrvKey(ExecutorID)
 		CheckError(err)
+	}
+
+	LocDesc = os.Getenv("EXECUTOR_LOCATION_DESC")
+
+	longStr := os.Getenv("EXECUTOR_LOCATION_LONG")
+	Long, err = strconv.ParseFloat(longStr, 64)
+	if err != nil {
+		log.Error("Failed to set location longitude")
+	}
+
+	latStr := os.Getenv("EXECUTOR_LOCATION_LAT")
+	Lat, err = strconv.ParseFloat(latStr, 64)
+	if err != nil {
+		log.Error("Failed to set location latitude")
 	}
 }
 
