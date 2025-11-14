@@ -7,21 +7,29 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const TimeLayout = "2006-01-02 15:04:05"
-const KEYCHAIN_PATH = ".colonies"
+const (
+	TimeLayout    = "2006-01-02 15:04:05"
+	KEYCHAIN_PATH = ".colonies"
+)
 
-var Verbose bool
-var ColoniesServerHost string
-var ColoniesServerPort int
-var ColoniesInsecure bool
-var ColoniesSkipTLSVerify bool
-var ColoniesUseTLS bool
-var ColonyID string
-var ColonyPrvKey string
-var ExecutorName string
-var ExecutorID string
-var ExecutorType string
-var ExecutorPrvKey string
+var (
+	Verbose               bool
+	ColoniesServerHost    string
+	ColoniesServerPort    int
+	ColoniesInsecure      bool
+	ColoniesSkipTLSVerify bool
+	ColoniesUseTLS        bool
+	ColonyID              string
+	ColonyName            string
+	ColonyPrvKey          string
+	ExecutorName          string
+	ExecutorID            string
+	ExecutorType          string
+	ExecutorPrvKey        string
+	Long                  float64
+	Lat                   float64
+	LocDesc               string
+)
 
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&Verbose, "verbose", "v", false, "verbose output")

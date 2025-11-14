@@ -1,0 +1,25 @@
+services:
+  sleep_executor:
+    image: colonyos/sleepexecutor:v1.0.0
+    environment:
+      LANG: ${LANG:-en_US.UTF-8}
+      LANGUAGE: ${LANGUAGE:-en_US.UTF-8}
+      LC_ALL: ${LC_ALL:-en_US.UTF-8}
+      LC_CTYPE: ${LC_CTYPE:-UTF-8}
+      TZ: ${TZ:-Europe/Stockholm}
+      COLONIES_TLS: ${COLONIES_TLS}
+      COLONIES_SERVER_HOST: ${COLONIES_SERVER_HOST}
+      COLONIES_SERVER_PORT: ${COLONIES_SERVER_PORT}
+      COLONIES_COLONY_NAME: ${COLONIES_COLONY_NAME}
+      COLONIES_COLONY_PRVKEY: ${COLONIES_COLONY_PRVKEY}
+      COLONIES_COLONY_ID: ${COLONIES_COLONY_ID}
+      COLONIES_PRVKEY: ${COLONIES_PRVKEY}
+      COLONIES_EXECUTOR_NAME: ${COLONIES_EXECUTOR_NAME}
+      COLONIES_EXECUTOR_PRVKEY: ${COLONIES_EXECUTOR_PRVKEY}
+      COLONIES_EXECUTOR_ID: ${COLONIES_EXECUTOR_ID}
+      EXECUTOR_ADD_DEBUG_LOGS: "false"
+      EXECUTOR_TYPE: "sleep-executor"
+      EXECUTOR_LOCATION_DESC: ""
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: ["sleep_executor", "start", "-v"]
