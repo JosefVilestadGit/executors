@@ -26,6 +26,19 @@ services:
       # Node metadata
       COLONIES_NODE_NAME: ${COLONIES_NODE_NAME}
       COLONIES_NODE_LOCATION: ${COLONIES_NODE_LOCATION}
+
+      # TLS config for auto-injection into deployed executors
+      COLONIES_TLS: ${COLONIES_TLS}
+      COLONIES_SERVER_TLS: ${COLONIES_SERVER_TLS}
+
+      # S3/MinIO config for auto-injection into deployed containers
+      AWS_S3_ENDPOINT: ${AWS_S3_ENDPOINT}
+      AWS_S3_ACCESSKEY: ${AWS_S3_ACCESSKEY}
+      AWS_S3_SECRETKEY: ${AWS_S3_SECRETKEY}
+      AWS_S3_REGION_KEY: ${AWS_S3_REGION_KEY}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+      AWS_S3_TLS: ${AWS_S3_TLS}
+      AWS_S3_SKIPVERIFY: ${AWS_S3_SKIPVERIFY}
     networks:
       - colonies_default
 
