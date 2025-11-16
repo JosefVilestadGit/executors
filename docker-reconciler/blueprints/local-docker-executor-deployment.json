@@ -1,10 +1,10 @@
 {
   "kind": "ExecutorDeployment",
   "metadata": {
-    "name": "docker-executor-edge"
+    "name": "docker-executor"
   },
   "handler": {
-    "executorName": "edge-node-docker-reconciler"
+    "executorName": "local-docker-node-reconciler"
   },
   "spec": {
     "image": "colonyos/dockerexecutor:v1.0.7",

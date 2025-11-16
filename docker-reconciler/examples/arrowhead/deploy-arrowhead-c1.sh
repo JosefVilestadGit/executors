@@ -10,15 +10,6 @@ EXAMPLES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "Deploying Arrowhead Cloud C1..."
 echo ""
 
-# Check if password is set
-#if ! grep -q "PASSWORD" /home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/.env 2>/dev/null; then
-#    echo "Warning: .env file not found or PASSWORD not set"
-#    echo "Please set PASSWORD in /home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/.env"
-#    exit 1
-#fi
-
-#PASSWORD=$(grep "^PASSWORD=" /home/johan/dev/github/colonyos/colonies/arrowhead/arrowhead-core-docker/.env | cut -d'=' -f2)
-
 PASSWORD=123456
 if [ -z "$PASSWORD" ]; then
     echo "Error: PASSWORD is empty in .env file"

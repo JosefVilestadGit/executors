@@ -15,6 +15,12 @@
       "type": "object",
       "required": ["instances"],
       "properties": {
+        "replicas": {
+          "type": "integer",
+          "description": "Number of replicas to deploy (optional, defaults to number of instances specified)",
+          "minimum": 0,
+          "default": 1
+        },
         "executorName": {
           "type": "string",
           "description": "Optional: Target specific reconciler node (e.g., 'edge-node-docker-reconciler'). If omitted, any reconciler with matching executorType can handle this deployment."

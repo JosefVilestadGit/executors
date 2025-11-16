@@ -1,0 +1,21 @@
+{
+  "metadata": {
+    "name": "helloworld",
+    "labels": {
+      "app": "helloworld",
+      "example": "true"
+    }
+  },
+  "kind": "DockerDeployment",
+  "spec": {
+    "replicas": 3,
+    "instances": [
+      {
+        "name": "helloworld",
+        "type": "container",
+        "image": "nginx:alpine",
+        "environment": {}
+      }
+    ]
+  }
+}

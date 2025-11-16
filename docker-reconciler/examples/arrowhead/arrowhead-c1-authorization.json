@@ -10,6 +10,7 @@
   },
   "kind": "DockerDeployment",
   "spec": {
+    "replicas": 1,
     "instances": [
       {
         "name": "c1-authorization",
