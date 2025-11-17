@@ -66,7 +66,7 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, blueprin
 		r.addLog(process, fmt.Sprintf("Found %d dirty container(s) with outdated generation, recreating...", len(dirtyContainers)))
 
 		for _, containerID := range dirtyContainers {
-			// Get container name before removing
+			// Get container info before removing
 			inspect, err := r.dockerClient.ContainerInspect(context.Background(), containerID)
 			if err != nil {
 				r.addLog(process, fmt.Sprintf("Warning: Failed to inspect dirty container %s: %v", containerID, err))
@@ -81,19 +81,12 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, blueprin
 			// With generation-based naming, the old executor needs to be deregistered
 			// because the new container will have a different executor name (with new generation number)
 
-			// Extract the old executor name from the container's environment
-			containerInfo, err := r.dockerClient.ContainerInspect(context.Background(), containerID)
-			if err == nil {
-				oldExecutorName := ""
-				for _, env := range containerInfo.Config.Env {
-					if strings.HasPrefix(env, "COLONIES_EXECUTOR_NAME=") {
-						oldExecutorName = strings.TrimPrefix(env, "COLONIES_EXECUTOR_NAME=")
-						break
-					}
-				}
-
-				if oldExecutorName != "" {
-					r.addLog(process, fmt.Sprintf("Deregistering old executor: %s", oldExecutorName))
+			// Extract the generation from the container's label to construct the correct executor name
+			if blueprint.Kind == "ExecutorDeployment" {
+				oldGeneration := inspect.Config.Labels["colonies.generation"]
+				if oldGeneration != "" {
+					oldExecutorName := fmt.Sprintf("%s-%s", containerName, oldGeneration)
+					r.addLog(process, fmt.Sprintf("Deregistering old executor: %s (generation %s)", oldExecutorName, oldGeneration))
 					if err := r.client.RemoveExecutor(r.colonyName, oldExecutorName, r.colonyOwnerKey); err != nil {
 						r.addLog(process, fmt.Sprintf("Warning: Failed to deregister executor %s: %v", oldExecutorName, err))
 					} else {
@@ -195,23 +188,34 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, blueprin
 
 			// Deregister executor BEFORE stopping container (if it's an ExecutorDeployment)
 			if blueprint.Kind == "ExecutorDeployment" && containerName != "" {
-				// Executor name includes generation suffix (e.g., "docker-executor-abc-5")
-				executorName := fmt.Sprintf("%s-%d", containerName, blueprint.Metadata.Generation)
+				// Extract the generation from the container's label
+				// The executor name uses the original generation, not the current blueprint generation
+				containerGeneration := cont.Labels["colonies.generation"]
+				if containerGeneration != "" {
+					executorName := fmt.Sprintf("%s-%s", containerName, containerGeneration)
 
-				log.WithFields(log.Fields{
-					"ExecutorName": executorName,
-					"ContainerID":  truncateID(containerID, 12),
-				}).Info("Deregistering executor before stopping container")
-
-				if err := r.client.RemoveExecutor(r.colonyName, executorName, r.colonyOwnerKey); err != nil {
 					log.WithFields(log.Fields{
-						"Error":        err,
-						"ExecutorName": executorName,
-					}).Warn("Failed to deregister executor")
-					r.addLog(process, fmt.Sprintf("Warning: Failed to deregister executor %s: %v", executorName, err))
-					// Continue anyway to stop the container
+						"ExecutorName":        executorName,
+						"ContainerID":         truncateID(containerID, 12),
+						"ContainerGeneration": containerGeneration,
+						"BlueprintGeneration": blueprint.Metadata.Generation,
+					}).Info("Deregistering executor before stopping container")
+
+					if err := r.client.RemoveExecutor(r.colonyName, executorName, r.colonyOwnerKey); err != nil {
+						log.WithFields(log.Fields{
+							"Error":        err,
+							"ExecutorName": executorName,
+						}).Warn("Failed to deregister executor")
+						r.addLog(process, fmt.Sprintf("Warning: Failed to deregister executor %s: %v", executorName, err))
+						// Continue anyway to stop the container
+					} else {
+						r.addLog(process, fmt.Sprintf("Deregistered executor: %s (generation %s)", executorName, containerGeneration))
+					}
 				} else {
-					r.addLog(process, fmt.Sprintf("Deregistered executor: %s", executorName))
+					log.WithFields(log.Fields{
+						"ContainerID": truncateID(containerID, 12),
+					}).Warn("Could not extract generation label from container")
+					r.addLog(process, "Warning: Could not extract generation from container label, skipping deregistration")
 				}
 			}
 

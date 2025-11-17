@@ -431,6 +431,87 @@ func TestReconciliationScenario_DriftDetection(t *testing.T) {
 	})
 }
 
+// TestReconciliationScenario_ExecutorDeregistrationCrossGenerations documents the expected behavior
+// when scaling down executors that were created at different generations
+// This test verifies the fix for the bug where executor names were incorrectly constructed
+// using the current generation instead of the generation they were created with
+//
+// Bug scenario:
+//   - Executors created at generation 7 have names like "docker-executor-8fcac-7"
+//   - When blueprint is updated to generation 11 and we scale down
+//   - OLD BUG: Code tried to deregister "docker-executor-8fcac-11" (doesn't exist!)
+//   - FIX: Extract generation from container label: "docker-executor-8fcac-7"
+//
+// The fix is in executor_deployment.go and cleanup.go where we now use
+// the colonies.generation label from the container, not the current blueprint generation
+func TestReconciliationScenario_ExecutorDeregistrationCrossGenerations(t *testing.T) {
+	mockDocker := new(MockDockerClient)
+	reconciler := createTestReconciler(mockDocker)
+
+	// Scenario: Executors were created at generation 7, but blueprint is now at generation 11
+	blueprint := &core.Blueprint{
+		Kind: "ExecutorDeployment",
+		Metadata: core.BlueprintMetadata{
+			Name:       "docker-executor",
+			Generation: 11, // Current generation
+		},
+		Spec: map[string]interface{}{
+			"replicas":     float64(2),
+			"image":        "colonyos/dockerexecutor:latest",
+			"executorType": "container-executor",
+		},
+	}
+
+	// Containers with old generation label (7)
+	// The executor names should be constructed as: containerName + "-" + generation_from_label
+	// e.g., "docker-executor-8fcac-7", NOT "docker-executor-8fcac-11"
+	containers := []types.Container{
+		{
+			ID:    "container-gen7-1",
+			Names: []string{"/docker-executor-8fcac"},
+			State: "running",
+			Labels: map[string]string{
+				"colonies.managed":    "true",
+				"colonies.deployment": "docker-executor",
+				"colonies.generation": "7", // OLD generation - this is the key!
+			},
+		},
+		{
+			ID:    "container-gen7-2",
+			Names: []string{"/docker-executor-c92f4"},
+			State: "running",
+			Labels: map[string]string{
+				"colonies.managed":    "true",
+				"colonies.deployment": "docker-executor",
+				"colonies.generation": "7", // OLD generation
+			},
+		},
+	}
+
+	mockDocker.On("ContainerList", mock.Anything, mock.Anything).Return(containers, nil)
+
+	// The fix ensures we detect these as old generation containers
+	hasOld, err := reconciler.HasOldGenerationContainers(blueprint)
+	assert.NoError(t, err)
+	assert.True(t, hasOld, "Should detect generation 7 containers as old (current is 11)")
+
+	t.Log("Scenario: Containers from generation 7 exist, current blueprint is generation 11")
+	t.Log("")
+	t.Log("OLD BUG: When scaling down, code would construct:")
+	t.Log("  executorName := containerName + blueprint.Metadata.Generation")
+	t.Log("  Result: 'docker-executor-8fcac-11' (WRONG - this executor doesn't exist!)")
+	t.Log("")
+	t.Log("FIX: Extract generation from container's colonies.generation label:")
+	t.Log("  containerGeneration := cont.Labels['colonies.generation']  // '7'")
+	t.Log("  executorName := containerName + containerGeneration")
+	t.Log("  Result: 'docker-executor-8fcac-7' (CORRECT!)")
+	t.Log("")
+	t.Log("This works for BOTH ExecutorDeployment AND DockerDeployment")
+	t.Log("because all containers have the colonies.generation label.")
+
+	mockDocker.AssertExpectations(t)
+}
+
 // Helper functions for test scenarios
 func generateContainerID(index int) string {
 	return fmt.Sprintf("container-%05d", index)

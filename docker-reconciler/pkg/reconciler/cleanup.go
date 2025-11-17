@@ -91,7 +91,7 @@ func (r *Reconciler) CleanupOldGenerationContainers(blueprint *core.Blueprint) e
 
 		// Remove containers from old generations
 		if generation < currentGeneration {
-			// Get container name for executor deregistration
+			// Get container name for logging
 			containerName := ""
 			if len(cont.Names) > 0 {
 				containerName = cont.Names[0]
@@ -109,13 +109,22 @@ func (r *Reconciler) CleanupOldGenerationContainers(blueprint *core.Blueprint) e
 			}).Info("Removing old generation container")
 
 			// Deregister executor if it's an ExecutorDeployment
+			// Use the generation from the container's label to construct the correct executor name
 			if blueprint.Kind == "ExecutorDeployment" && containerName != "" {
-				if err := r.client.RemoveExecutor(r.colonyName, containerName, r.colonyOwnerKey); err != nil {
+				// The executor name includes the generation it was created with
+				executorName := fmt.Sprintf("%s-%d", containerName, generation)
+
+				if err := r.client.RemoveExecutor(r.colonyName, executorName, r.colonyOwnerKey); err != nil {
 					log.WithFields(log.Fields{
 						"Error":        err,
-						"ExecutorName": containerName,
+						"ExecutorName": executorName,
 					}).Debug("Failed to deregister executor (may already be removed)")
 					// Continue anyway - executor might already be deregistered
+				} else {
+					log.WithFields(log.Fields{
+						"ExecutorName": executorName,
+						"Generation":   generation,
+					}).Debug("Deregistered old generation executor")
 				}
 			}
 
