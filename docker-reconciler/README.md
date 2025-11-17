@@ -1,6 +1,8 @@
 # Docker Reconciler
 
-A ColonyOS executor that acts as a Kubernetes-style controller for managing Docker containers declaratively. It watches for blueprint changes and reconciles the desired state with actual running containers.
+A ColonyOS executor that acts as a Kubernetes-style controller for managing Docker containers declaratively. The reconciler uses server-side crons to periodically ensure containers match their blueprint specifications.
+
+> **New Architecture**: The reconciler is now completely stateless and cron-driven. See [CRON_ARCHITECTURE.md](./docs/CRON_ARCHITECTURE.md) for details on the new design.
 
 ## Table of Contents
 
@@ -21,12 +23,13 @@ The Docker Reconciler is a **declarative container management system** for Colon
 
 **Think of it like Kubernetes, but simpler:**
 - You define a blueprint (like a Kubernetes deployment)
-- The reconciler watches for changes
+- Server-side crons trigger periodic reconciliation
 - Containers are automatically created, updated, or removed to match your blueprint
 
 **Key Benefits:**
 - **Declarative**: Describe what you want, not how to do it
-- **Self-healing**: Reconciler constantly ensures actual state matches desired state
+- **Cron-driven reconciliation**: Server automatically triggers periodic checks (every 60 seconds)
+- **Stateless executors**: No background loops or in-memory state tracking
 - **Version tracking**: Uses generation counters to detect and apply updates
 - **Zero-downtime updates**: Containers are recreated when configuration changes
 
@@ -56,7 +59,7 @@ This tells the reconciler: "I want 3 nginx containers running, named web-server"
 
 **Reconciliation** is the process of making reality match your blueprint. The reconciler:
 
-1. **Reads** your blueprint (desired state)
+1. **Fetches** your blueprint from the server (desired state)
 2. **Lists** currently running containers (actual state)
 3. **Compares** them
 4. **Takes action** to match desired state:
@@ -64,7 +67,10 @@ This tells the reconciler: "I want 3 nginx containers running, named web-server"
    - Stop excess containers if too many
    - Recreate containers if configuration changed
 
-This happens automatically whenever you create or update a blueprint.
+**When reconciliation happens:**
+- **Automatically** every 60 seconds via server-side crons (self-healing)
+- **Immediately** when you create or update a blueprint (cron is triggered)
+- **Manually** via `colonies blueprint reconcile --name <name>`
 
 ### 3. Generation Tracking
 
@@ -103,7 +109,8 @@ flowchart TB
 
     subgraph ColonyOS Server
         B[Blueprint Store]
-        S[Scheduler]
+        CR[Cron Scheduler]
+        S[Process Scheduler]
     end
 
     subgraph Docker Host
@@ -114,15 +121,17 @@ flowchart TB
         C3[Container N]
     end
 
-    U -->|1. Create Blueprint| B
-    B -->|2. Trigger Process| S
-    S -->|3. Assign to Reconciler| R
-    R -->|4. Manage Containers| D
+    U -->|1. Create/Update Blueprint| B
+    B -->|2. Auto-create/trigger Cron| CR
+    CR -->|3. Every 60s: Create Process| S
+    S -->|4. Assign to Reconciler| R
+    R -->|5. Fetch Blueprint| B
+    R -->|6. Manage Containers| D
     D --> C1
     D --> C2
     D --> C3
-    R -->|5. Report Status| S
-    S -->|6. Update Blueprint| B
+    R -->|7. Report Status| S
+    S -->|8. Update Blueprint Status| B
 ```
 
 ### How It Works
@@ -130,16 +139,20 @@ flowchart TB
 **Step 1: User Creates Blueprint**
 - You write a JSON specification describing your containers
 - Submit it to ColonyOS: `colonies blueprint add --spec deployment.json`
+- Server auto-creates a cron named `reconcile-<blueprint-name>`
 
-**Step 2: Server Triggers Reconciliation**
+**Step 2: Server Schedules Reconciliation**
 - ColonyOS stores the blueprint with a generation number
-- Creates a reconciliation process
-- Assigns it to the Docker Reconciler executor
+- Cron runs every 60 seconds (periodic self-healing)
+- Cron also triggered immediately on blueprint create/update
+- Each cron run creates a reconciliation process
 
-**Step 3: Reconciler Takes Action**
-- Receives the blueprint
+**Step 3: Reconciler Fetches and Compares**
+- Executor pulls process from queue
+- Fetches current blueprint from server (always latest state)
 - Lists existing containers by label (`colonies.deployment=<name>`)
 - Compares actual vs desired state
+- Checks if reconciliation is actually needed (early exit if in sync)
 
 **Step 4: Container Management**
 - Pulls container images if needed
@@ -158,24 +171,33 @@ flowchart TB
 sequenceDiagram
     participant User
     participant Server
+    participant Cron
     participant Reconciler
     participant Docker
 
     User->>Server: Create/Update Blueprint
-    Note over Server: Generation: 1 → 2
-    Server->>Reconciler: Trigger reconciliation
+    Note over Server: Generation: 1 → 2<br/>Auto-create cron
+    Server->>Cron: Trigger cron immediately
 
-    Reconciler->>Docker: List containers
-    Docker-->>Reconciler: [container1, container2]
+    loop Every 60 seconds
+        Cron->>Server: Create process
+        Server->>Reconciler: Assign process
 
-    Reconciler->>Reconciler: Compare generations
-    Note over Reconciler: Container1: gen 1 (OLD)<br/>Container2: gen 1 (OLD)<br/>Need: gen 2
+        Reconciler->>Server: Fetch blueprint
+        Server-->>Reconciler: Blueprint (gen 2)
 
-    Reconciler->>Docker: Stop old containers
-    Reconciler->>Docker: Start new containers
-    Note over Docker: All containers now gen 2
+        Reconciler->>Docker: List containers
+        Docker-->>Reconciler: [container1, container2]
 
-    Reconciler->>Server: Report success
+        Reconciler->>Reconciler: Check if needed
+        Note over Reconciler: Container1: gen 1 (OLD)<br/>Container2: gen 1 (OLD)<br/>Need: gen 2
+
+        Reconciler->>Docker: Stop old containers
+        Reconciler->>Docker: Start new containers
+        Note over Docker: All containers now gen 2
+
+        Reconciler->>Server: Report success + status
+    end
 ```
 
 ## Blueprint Types
@@ -708,7 +730,7 @@ docker rm -f $(docker ps -aq --filter "label=colonies.managed=true")
 docker rm -f $(docker ps -aq --filter "label=colonies.deployment=web")
 ```
 
-**Important:** If you manually remove containers, they won't restart automatically. The reconciler only acts when blueprints are created/updated. To trigger reconciliation, update the blueprint (even with no changes).
+**Important:** If you manually remove containers, they will restart automatically within 60 seconds (the cron interval). You can also manually trigger reconciliation with: `colonies blueprint reconcile --name <blueprint-name>` or `colonies cron run --cronid <cron-id>`
 
 ## Development
 
@@ -717,24 +739,26 @@ docker rm -f $(docker ps -aq --filter "label=colonies.deployment=web")
 ```
 docker-reconciler/
 ├── cmd/
-│   └── main.go              # Entry point
+│   └── main.go                    # Entry point
 ├── pkg/
-│   ├── executor/            # Process assignment & orchestration
-│   │   └── executor.go      # - Handles reconciliation processes
-│   │                        # - Detects node metadata
-│   │                        # - Manages blueprint tracking
-│   ├── reconciler/          # Core reconciliation logic
-│   │   └── reconciler.go    # - Compares actual vs desired state
-│   │                        # - Manages container lifecycle
-│   │                        # - Interacts with Docker API
-│   └── build/               # Build version info
+│   ├── executor/                  # Process assignment & orchestration (STATELESS)
+│   │   ├── executor.go            # - Main executor loop
+│   │   ├── reconciliation_loop.go # - Process polling and dispatch
+│   │   ├── process_handler.go     # - Handles reconciliation processes
+│   │   ├── reconciliation_helpers.go # - Status checking utilities
+│   │   └── node_metadata.go       # - Auto-detects system info
+│   ├── reconciler/                # Core reconciliation logic
+│   │   └── reconciler.go          # - Compares actual vs desired state
+│   │                              # - Manages container lifecycle
+│   │                              # - Interacts with Docker API
+│   └── build/                     # Build version info
 ├── internal/
-│   └── cli/                 # CLI commands
-├── examples/                # Example blueprints
-├── docker-compose.yml       # Docker Compose setup
-├── Dockerfile               # Container image
-├── Makefile                 # Build automation
-└── README.md                # This file
+│   └── cli/                       # CLI commands
+├── examples/                      # Example blueprints
+├── docker-compose.yml             # Docker Compose setup
+├── Dockerfile                     # Container image
+├── Makefile                       # Build automation
+└── README.md                      # This file
 ```
 
 ### Building
@@ -756,10 +780,16 @@ make clean
 ### Key Functions
 
 **executor/executor.go:**
-- `ServeForEver()`: Main loop - assigns processes from ColonyOS
-- `handleReconcile()`: Processes reconciliation requests
+- `ServeForEver()`: Main loop - blocks waiting for processes from ColonyOS
+- `assignNextProcess()`: Polls server for work (blocking call)
+- `dispatchProcess()`: Routes to appropriate handler
 - `detectNodeMetadata()`: Auto-detects system information
 - `detectGPUs()`: Detects NVIDIA GPUs via nvidia-smi
+
+**executor/process_handler.go:**
+- `handleReconcile()`: Fetches blueprint and triggers reconciliation
+- `checkReconciliationNeeded()`: Early exit if state matches (optimization)
+- `getDesiredReplicas()`: Extracts replica count from blueprint
 
 **reconciler/reconciler.go:**
 - `Reconcile()`: Routes to ExecutorDeployment or DockerDeployment handler

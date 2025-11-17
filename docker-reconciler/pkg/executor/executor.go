@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 )
 
 // Executor is the main deployment controller executor
+// Executor is now completely stateless - no managed resources tracking
 type Executor struct {
 	verbose            bool
 	coloniesServerHost string
@@ -31,8 +31,6 @@ type Executor struct {
 	cancel             context.CancelFunc
 	client             *client.ColoniesClient
 	reconciler         *reconciler.Reconciler
-	managedResources   map[string]*core.Blueprint // resourceID -> blueprint
-	resourcesMutex     sync.RWMutex
 }
 
 // createColoniesExecutorWithKey creates a new executor with generated keys
@@ -59,9 +57,7 @@ func (e *Executor) createColoniesExecutorWithKey(colonyName string) (*core.Execu
 
 // CreateExecutor creates and initializes a new Executor
 func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
-	e := &Executor{
-		managedResources: make(map[string]*core.Blueprint),
-	}
+	e := &Executor{}
 	for _, opt := range opts {
 		opt(e)
 	}
@@ -101,7 +97,7 @@ func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
 		log.WithFields(log.Fields{"ColonyName": e.colonyName, "ExecutorName": e.executorName}).Info("Self-registered")
 	}
 
-	// Register the reconcile function
+	// Register the reconcile function (fetch-based, used by cron-based reconciliation)
 	function := &core.Function{ExecutorName: e.executorName, ColonyName: e.colonyName, FuncName: "reconcile"}
 	_, err = e.client.AddFunction(function, e.executorPrvKey)
 	if err != nil {

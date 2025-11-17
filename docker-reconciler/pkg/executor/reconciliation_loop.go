@@ -9,12 +9,9 @@ import (
 )
 
 // ServeForEver runs the main executor loop, continuously polling for reconciliation processes
+// The reconciler is now completely stateless and driven by server-side crons
 func (e *Executor) ServeForEver() error {
-	// Perform startup reconciliation before entering main loop
-	e.performStartupReconciliation()
-
-	// Start background self-healing loop (if implemented)
-	// go e.startSelfHealingLoop()
+	log.Info("Starting reconciler in stateless mode (cron-driven)")
 
 	// Main process assignment loop
 	for {

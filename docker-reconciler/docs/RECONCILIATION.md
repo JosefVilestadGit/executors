@@ -1,8 +1,19 @@
 # Docker-Reconciler Reconciliation Mechanism
 
-## Overview
+> **⚠️ OUTDATED**: This document describes the old background-loop based architecture.
+>
+> **For current architecture**, see:
+> - [CRON_ARCHITECTURE.md](./CRON_ARCHITECTURE.md) - New cron-based, stateless design
+> - [README.md](./README.md) - Updated user guide
+> - [BLUEPRINT_CRON_LIFECYCLE.md](./BLUEPRINT_CRON_LIFECYCLE.md) - Cron lifecycle details
+>
+> The information below is kept for historical reference but no longer reflects how the system works.
 
-The docker-reconciler is a Colonies executor that maintains desired state for Docker container deployments. It continuously ensures that the actual state of running containers matches the desired state defined in blueprints, implementing a reconciliation loop pattern similar to Kubernetes controllers.
+---
+
+## Overview (Historical)
+
+The docker-reconciler **was** a Colonies executor that maintained desired state for Docker container deployments using background loops and startup reconciliation. This has been replaced with a cron-based, server-driven architecture.
 
 **Core Principles:**
 - **Declarative Configuration**: Users define desired state in blueprints
