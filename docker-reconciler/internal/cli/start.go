@@ -120,12 +120,9 @@ func parseEnv() {
 		}
 	}
 
-	// Support both new (COLONIES_CLIENT_HTTP_INSECURE) and old (COLONIES_INSECURE) naming
-	coloniesInsecureStr := os.Getenv("COLONIES_CLIENT_HTTP_INSECURE")
-	if coloniesInsecureStr == "" {
-		coloniesInsecureStr = os.Getenv("COLONIES_INSECURE")
-	}
-	if coloniesInsecureStr == "true" {
+	// COLONIES_TLS controls whether to use HTTPS (true) or HTTP (false)
+	coloniesTLSStr := os.Getenv("COLONIES_TLS")
+	if coloniesTLSStr == "false" {
 		coloniesInsecure = true
 	} else {
 		coloniesInsecure = false

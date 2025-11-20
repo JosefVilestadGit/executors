@@ -201,8 +201,8 @@ func (r *Reconciler) CleanupStoppedContainers() error {
 
 // CleanupStaleExecutors removes executor registrations for containers that no longer exist
 func (r *Reconciler) CleanupStaleExecutors(deploymentName string, executorType string) error {
-	// Get all executors of the given type
-	executors, err := r.client.GetExecutors(r.colonyName, r.colonyOwnerKey)
+	// Get all executors of the given type (use executor key, not colony owner key)
+	executors, err := r.client.GetExecutors(r.colonyName, r.executorPrvKey)
 	if err != nil {
 		return fmt.Errorf("failed to list executors: %w", err)
 	}
@@ -247,8 +247,16 @@ func (r *Reconciler) CleanupStaleExecutors(deploymentName string, executorType s
 			continue
 		}
 
+		// Executor name format: <deployment>-<hash>-<generation>
+		// Container name format: <deployment>-<hash>
+		// Strip the generation suffix to get the container name
+		containerName := executor.Name
+		if lastDash := strings.LastIndex(executor.Name, "-"); lastDash != -1 {
+			containerName = executor.Name[:lastDash]
+		}
+
 		// Check if container exists for this executor
-		if !containerNames[executor.Name] {
+		if !containerNames[containerName] {
 			log.WithFields(log.Fields{
 				"ExecutorName": executor.Name,
 				"ExecutorID":   executor.ID,
@@ -270,6 +278,88 @@ func (r *Reconciler) CleanupStaleExecutors(deploymentName string, executorType s
 	if removedCount > 0 {
 		log.WithFields(log.Fields{"Count": removedCount}).Info("Cleaned up stale executor registrations")
 	}
+
+	return nil
+}
+
+// CleanupDeletedBlueprint removes all containers and executors for a deleted blueprint
+func (r *Reconciler) CleanupDeletedBlueprint(blueprintName string) error {
+	ctx := context.Background()
+
+	// List ALL containers for this deployment (including stopped)
+	filterArgs := filters.NewArgs()
+	filterArgs.Add("label", "colonies.deployment="+blueprintName)
+
+	containers, err := r.dockerClient.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filterArgs,
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to list containers for cleanup: %w", err)
+	}
+
+	if len(containers) == 0 {
+		log.WithFields(log.Fields{
+			"BlueprintName": blueprintName,
+		}).Info("No containers found for deleted blueprint")
+		return nil
+	}
+
+	removedCount := 0
+	for _, cont := range containers {
+		// Get container name for logging
+		containerName := ""
+		if len(cont.Names) > 0 {
+			containerName = cont.Names[0]
+			if len(containerName) > 0 && containerName[0] == '/' {
+				containerName = containerName[1:]
+			}
+		}
+
+		// Get generation for executor deregistration
+		generationStr := cont.Labels["colonies.generation"]
+		var generation int64
+		if generationStr != "" {
+			fmt.Sscanf(generationStr, "%d", &generation)
+		}
+
+		log.WithFields(log.Fields{
+			"ContainerID":   truncateID(cont.ID, 12),
+			"ContainerName": containerName,
+			"State":         cont.State,
+		}).Info("Removing container for deleted blueprint")
+
+		// Deregister executor if this was an ExecutorDeployment
+		if containerName != "" && generation > 0 {
+			executorName := fmt.Sprintf("%s-%d", containerName, generation)
+			if err := r.client.RemoveExecutor(r.colonyName, executorName, r.colonyOwnerKey); err != nil {
+				log.WithFields(log.Fields{
+					"Error":        err,
+					"ExecutorName": executorName,
+				}).Debug("Failed to deregister executor (may already be removed)")
+			} else {
+				log.WithFields(log.Fields{
+					"ExecutorName": executorName,
+				}).Debug("Deregistered executor for deleted blueprint")
+			}
+		}
+
+		// Remove the container
+		if err := r.dockerClient.ContainerRemove(ctx, cont.ID, container.RemoveOptions{Force: true}); err != nil {
+			log.WithFields(log.Fields{
+				"Error":       err,
+				"ContainerID": truncateID(cont.ID, 12),
+			}).Warn("Failed to remove container")
+		} else {
+			removedCount++
+		}
+	}
+
+	log.WithFields(log.Fields{
+		"Count":         removedCount,
+		"BlueprintName": blueprintName,
+	}).Info("Cleaned up containers for deleted blueprint")
 
 	return nil
 }

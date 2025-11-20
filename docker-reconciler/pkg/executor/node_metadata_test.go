@@ -2,29 +2,30 @@ package executor
 
 import (
 	"runtime"
+	"strconv"
 	"testing"
 
+	"github.com/colonyos/colonies/pkg/core"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestDetectNodeMetadata(t *testing.T) {
-	metadata := detectNodeMetadata()
+func TestPopulateExecutorCapabilities(t *testing.T) {
+	executor := &core.Executor{}
+	populateExecutorCapabilities(executor)
 
-	assert.NotNil(t, metadata, "metadata should not be nil")
-	assert.Greater(t, metadata.CPU, 0, "CPU cores should be greater than 0")
-	assert.NotEmpty(t, metadata.Hostname, "Hostname should be detected")
-	assert.NotEmpty(t, metadata.Location, "Location should be set")
-	assert.NotEmpty(t, metadata.Platform, "Platform should be detected")
-	assert.NotEmpty(t, metadata.Architecture, "Architecture should be detected")
+	assert.NotEmpty(t, executor.Location.Description, "Location should be set")
+	assert.NotEmpty(t, executor.Capabilities.Hardware.Platform, "Platform should be detected")
+	assert.NotEmpty(t, executor.Capabilities.Hardware.Architecture, "Architecture should be detected")
+	assert.NotEmpty(t, executor.Capabilities.Hardware.CPU, "CPU should be detected")
 
 	// Memory detection only works on Linux
 	if runtime.GOOS == "linux" {
-		assert.GreaterOrEqual(t, metadata.Memory, int64(0), "memory should be non-negative")
+		assert.NotEmpty(t, executor.Capabilities.Hardware.Memory, "Memory should be detected on Linux")
 	}
 
-	// Capabilities should include docker
-	assert.Contains(t, metadata.Capabilities, "docker", "should have docker capability")
-	assert.NotNil(t, metadata.Labels, "labels should not be nil")
+	// Software info should be set
+	assert.Equal(t, "docker-reconciler", executor.Capabilities.Software.Name)
+	assert.Equal(t, "reconciler", executor.Capabilities.Software.Type)
 }
 
 func TestDetectMemoryMB(t *testing.T) {
@@ -90,38 +91,28 @@ func TestGPUInfo(t *testing.T) {
 	}
 }
 
-func TestDetectNodeMetadata_CPUCores(t *testing.T) {
-	metadata := detectNodeMetadata()
+func TestPopulateExecutorCapabilities_CPUCores(t *testing.T) {
+	executor := &core.Executor{}
+	populateExecutorCapabilities(executor)
 
 	// Verify CPU cores matches runtime detection
-	expectedCores := runtime.NumCPU()
-	assert.Equal(t, expectedCores, metadata.CPU, "CPU cores should match runtime.NumCPU()")
+	expectedCores := strconv.Itoa(runtime.NumCPU()) + " cores"
+	assert.Equal(t, expectedCores, executor.Capabilities.Hardware.CPU, "CPU should match runtime.NumCPU()")
 }
 
-func TestDetectNodeMetadata_PlatformInfo(t *testing.T) {
-	metadata := detectNodeMetadata()
+func TestPopulateExecutorCapabilities_PlatformInfo(t *testing.T) {
+	executor := &core.Executor{}
+	populateExecutorCapabilities(executor)
 
 	// Verify platform and architecture match runtime
-	assert.Equal(t, runtime.GOOS, metadata.Platform, "Platform should match runtime.GOOS")
-	assert.Equal(t, runtime.GOARCH, metadata.Architecture, "Architecture should match runtime.GOARCH")
+	assert.Equal(t, runtime.GOOS, executor.Capabilities.Hardware.Platform, "Platform should match runtime.GOOS")
+	assert.Equal(t, runtime.GOARCH, executor.Capabilities.Hardware.Architecture, "Architecture should match runtime.GOARCH")
 }
 
-func TestDetectNodeMetadata_GPU_Labels(t *testing.T) {
-	metadata := detectNodeMetadata()
+func TestPopulateExecutorCapabilities_GPU(t *testing.T) {
+	executor := &core.Executor{}
+	populateExecutorCapabilities(executor)
 
-	// GPU count should match the number of GPU labels
-	assert.GreaterOrEqual(t, metadata.GPU, 0, "GPU count should be non-negative")
-
-	// If GPUs are detected, verify labels exist
-	if metadata.GPU > 0 {
-		// Check that GPU labels are populated
-		hasGPULabel := false
-		for key := range metadata.Labels {
-			if len(key) >= 4 && key[:4] == "gpu." {
-				hasGPULabel = true
-				break
-			}
-		}
-		assert.True(t, hasGPULabel, "Should have GPU labels when GPUs are detected")
-	}
+	// GPU count should be non-negative
+	assert.GreaterOrEqual(t, executor.Capabilities.Hardware.GPU.Count, 0, "GPU count should be non-negative")
 }

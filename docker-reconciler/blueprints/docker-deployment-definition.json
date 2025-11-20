@@ -23,7 +23,7 @@
         },
         "executorName": {
           "type": "string",
-          "description": "Optional: Target specific reconciler node (e.g., 'edge-node-docker-reconciler'). If omitted, any reconciler with matching executorType can handle this deployment."
+          "description": "Optional: Target specific reconciler node (e.g., 'edge-docker-reconciler'). If omitted, any reconciler with matching executorType can handle this deployment."
         },
         "executorNames": {
           "type": "array",

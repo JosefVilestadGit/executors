@@ -17,7 +17,7 @@ build:
 
 # Build from repository root (two levels up) to include executors/ and colonies/
 container:
-	cd ../.. && docker build -f executors/docker-reconciler/Dockerfile \
+	cd ../.. && docker build --no-cache -f executors/docker-reconciler/Dockerfile \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg BUILDTIME=$(BUILDTIME) \
 		-t $(BUILD_IMAGE) \

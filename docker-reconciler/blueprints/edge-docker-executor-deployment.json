@@ -4,7 +4,7 @@
     "name": "edge-docker-executor"
   },
   "handler": {
-    "executorName": "edge-node-docker-reconciler"
+    "executorName": "edge-docker-reconciler"
   },
   "spec": {
     "image": "colonyos/dockerexecutor:v1.0.7",

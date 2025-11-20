@@ -113,6 +113,43 @@ func (e *Executor) handleReconcile(process *core.Process) {
 	}
 }
 
+// handleCleanup processes a cleanup request to remove containers for a deleted blueprint
+func (e *Executor) handleCleanup(process *core.Process) {
+	log.WithFields(log.Fields{"ProcessID": process.ID}).Info("Handling blueprint cleanup")
+
+	// Extract blueprint name from process kwargs
+	blueprintName, ok := process.FunctionSpec.KwArgs["blueprintName"].(string)
+	if !ok {
+		e.failProcess(process, "Blueprint name not found in process kwargs")
+		return
+	}
+
+	log.WithFields(log.Fields{
+		"BlueprintName": blueprintName,
+	}).Info("Cleaning up containers for deleted blueprint")
+
+	// Cleanup containers using the reconciler's cleanup method
+	if err := e.reconciler.CleanupDeletedBlueprint(blueprintName); err != nil {
+		e.failProcess(process, "Cleanup failed: "+err.Error())
+		return
+	}
+
+	// Close process successfully
+	output := []interface{}{
+		map[string]interface{}{
+			"status": "cleanup completed",
+		},
+	}
+
+	if err := e.client.CloseWithOutput(process.ID, output, e.executorPrvKey); err != nil {
+		log.WithFields(log.Fields{"Error": err}).Error("Failed to close cleanup process")
+	} else {
+		log.WithFields(log.Fields{
+			"BlueprintName": blueprintName,
+		}).Info("Cleanup completed successfully")
+	}
+}
+
 // failProcess marks a process as failed with the given reason
 func (e *Executor) failProcess(process *core.Process, reason string) {
 	log.WithFields(log.Fields{"ProcessID": process.ID, "Reason": reason}).Error("Process failed")

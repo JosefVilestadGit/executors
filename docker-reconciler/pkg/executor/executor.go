@@ -48,9 +48,8 @@ func (e *Executor) createColoniesExecutorWithKey(colonyName string) (*core.Execu
 
 	executor := core.CreateExecutor(executorID, e.executorType, e.executorName, colonyName, time.Now(), time.Now())
 
-	// Add node metadata for auto-registration
-	nodeMetadata := detectNodeMetadata()
-	executor.NodeMetadata = nodeMetadata
+	// Populate executor capabilities with auto-detected hardware info
+	populateExecutorCapabilities(executor)
 
 	return executor, executorID, executorPrvKey, nil
 }
@@ -105,7 +104,7 @@ func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
 	}
 
 	// Get location from environment for child executors
-	location := os.Getenv("COLONIES_NODE_LOCATION")
+	location := os.Getenv("COLONIES_EXECUTOR_LOCATION")
 	if location == "" {
 		location = "default"
 	}

@@ -42,23 +42,11 @@ func (r *Reconciler) getDefaultEnvVars(executorType string) map[string]string {
 	if backends := os.Getenv("COLONIES_CLIENT_BACKENDS"); backends != "" {
 		defaults["COLONIES_CLIENT_BACKENDS"] = backends
 	}
-	if host := os.Getenv("COLONIES_CLIENT_HTTP_HOST"); host != "" {
-		defaults["COLONIES_CLIENT_HTTP_HOST"] = host
-	}
-	if port := os.Getenv("COLONIES_CLIENT_HTTP_PORT"); port != "" {
-		defaults["COLONIES_CLIENT_HTTP_PORT"] = port
-	}
-	if insecure := os.Getenv("COLONIES_CLIENT_HTTP_INSECURE"); insecure != "" {
-		defaults["COLONIES_CLIENT_HTTP_INSECURE"] = insecure
-	}
 	if host := os.Getenv("COLONIES_SERVER_HOST"); host != "" {
 		defaults["COLONIES_SERVER_HOST"] = host
 	}
 	if port := os.Getenv("COLONIES_SERVER_PORT"); port != "" {
 		defaults["COLONIES_SERVER_PORT"] = port
-	}
-	if tls := os.Getenv("COLONIES_SERVER_TLS"); tls != "" {
-		defaults["COLONIES_SERVER_TLS"] = tls
 	}
 	if tls := os.Getenv("COLONIES_TLS"); tls != "" {
 		defaults["COLONIES_TLS"] = tls

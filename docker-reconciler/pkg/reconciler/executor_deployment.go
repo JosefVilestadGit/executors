@@ -139,7 +139,7 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, blueprin
 			var containerName string
 			if blueprint.Kind == "ExecutorDeployment" {
 				// For executor deployments, generate unique name based on blueprint name
-				uniqueExecutorName, err := r.generateUniqueExecutorName(blueprint.Metadata.Namespace, blueprint.Metadata.Name)
+				uniqueExecutorName, err := r.generateUniqueExecutorName(blueprint.Metadata.ColonyName, blueprint.Metadata.Name)
 				if err != nil {
 					r.addLog(process, fmt.Sprintf("Error generating unique executor name: %v", err))
 					return fmt.Errorf("failed to generate unique executor name: %w", err)

@@ -364,7 +364,7 @@ export COLONIES_SERVER_HOST="192.168.1.100"
 Customize node name and location:
 ```bash
 # docker-compose.env
-export COLONIES_NODE_NAME="my-edge-node"
+export COLONIES_NODE_NAME="my-edge"
 export COLONIES_NODE_LOCATION="aws-us-west-2"
 ```
 

@@ -13,7 +13,7 @@ services:
       # ColonyOS server connection (sourced from docker-compose.env)
       COLONIES_SERVER_HOST: ${COLONIES_SERVER_HOST}
       COLONIES_SERVER_PORT: ${COLONIES_SERVER_PORT}
-      COLONIES_INSECURE: ${COLONIES_INSECURE}
+      COLONIES_TLS: ${COLONIES_TLS}
 
       # Colony information
       COLONIES_COLONY_NAME: ${COLONIES_COLONY_NAME}
@@ -22,14 +22,7 @@ services:
       # Executor configuration
       COLONIES_EXECUTOR_NAME: ${COLONIES_EXECUTOR_NAME}
       COLONIES_EXECUTOR_TYPE: ${COLONIES_EXECUTOR_TYPE}
-
-      # Node metadata
-      COLONIES_NODE_NAME: ${COLONIES_NODE_NAME}
-      COLONIES_NODE_LOCATION: ${COLONIES_NODE_LOCATION}
-
-      # TLS config for auto-injection into deployed executors
-      COLONIES_TLS: ${COLONIES_TLS}
-      COLONIES_SERVER_TLS: ${COLONIES_SERVER_TLS}
+      COLONIES_EXECUTOR_LOCATION: ${COLONIES_EXECUTOR_LOCATION}
 
       # S3/MinIO config for auto-injection into deployed containers
       AWS_S3_ENDPOINT: ${AWS_S3_ENDPOINT}
@@ -41,6 +34,45 @@ services:
       AWS_S3_SKIPVERIFY: ${AWS_S3_SKIPVERIFY}
     networks:
       - colonies_default
+
+  # Init container to add blueprint after reconciler is ready
+  edge-init:
+    image: colonyos/colonies:latest
+    container_name: edge-init
+    depends_on:
+      - docker-reconciler-edge
+    volumes:
+      - ./blueprints:/blueprints:ro
+    environment:
+      COLONIES_SERVER_HOST: ${COLONIES_SERVER_HOST}
+      COLONIES_SERVER_PORT: ${COLONIES_SERVER_PORT}
+      COLONIES_TLS: ${COLONIES_TLS}
+      COLONIES_COLONY_NAME: ${COLONIES_COLONY_NAME}
+      COLONIES_COLONY_PRVKEY: ${COLONIES_COLONY_PRVKEY}
+      COLONIES_PRVKEY: ${COLONIES_PRVKEY}
+    networks:
+      - colonies_default
+    entrypoint: /bin/sh
+    command: >
+      -c "
+      echo 'Waiting for edge-docker-reconciler to register...';
+      for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+        if colonies executor ls 2>/dev/null | grep -q edge-docker-reconciler; then
+          echo 'edge-docker-reconciler is registered';
+          break;
+        fi;
+        echo \"Attempt $$i: waiting for edge-docker-reconciler...\";
+        sleep 2;
+      done;
+      echo 'Checking if edge-docker-executor blueprint exists...';
+      if colonies blueprint get --name edge-docker-executor >/dev/null 2>&1; then
+        echo 'Blueprint already exists, skipping add';
+      else
+        echo 'Adding edge-docker-executor deployment...';
+        colonies blueprint add --spec /blueprints/edge-docker-executor-deployment.json;
+      fi;
+      echo 'Edge init complete';
+      "
 
 networks:
   colonies_default:

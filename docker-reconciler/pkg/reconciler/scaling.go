@@ -70,7 +70,7 @@ func (r *Reconciler) scaleUp(blueprint *core.Blueprint, spec DeploymentSpec, cur
 
 	for i := 0; i < containersToStart; i++ {
 		// Generate unique executor name
-		uniqueExecutorName, err := r.generateUniqueExecutorName(blueprint.Metadata.Namespace, blueprint.Metadata.Name)
+		uniqueExecutorName, err := r.generateUniqueExecutorName(blueprint.Metadata.ColonyName, blueprint.Metadata.Name)
 		if err != nil {
 			return fmt.Errorf("failed to generate unique executor name: %w", err)
 		}

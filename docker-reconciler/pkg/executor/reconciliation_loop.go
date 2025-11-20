@@ -59,6 +59,8 @@ func (e *Executor) dispatchProcess(process *core.Process) {
 	switch process.FunctionSpec.FuncName {
 	case "reconcile":
 		e.handleReconcile(process)
+	case "cleanup":
+		e.handleCleanup(process)
 	default:
 		e.handleUnsupportedFunction(process)
 	}
