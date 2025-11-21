@@ -8,7 +8,7 @@
   },
   "spec": {
     "image": "colonyos/dockerexecutor:v1.0.7",
-    "replicas": 10,
+    "replicas": 1,
     "executorType": "container-executor",
     "volumes": [
       {
