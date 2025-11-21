@@ -6,31 +6,48 @@ The docker-reconciler is now **completely stateless** and driven by server-side 
 
 ## How It Works
 
-### 1. Blueprint Lifecycle = Cron Lifecycle
+### 1. Consolidated Cron Architecture
 
-When you create/update/delete a blueprint, the server automatically manages a corresponding cron:
+The system uses **consolidated crons** - one cron per Kind (executor type), not per blueprint. This is critical for scalability:
 
 ```
-colonies blueprint add    →  Server creates cron: "reconcile-<blueprint-name>"
-colonies blueprint update →  Server triggers cron immediately
-colonies blueprint remove →  Server deletes cron
+colonies blueprint add    →  Server creates cron: "reconcile-<Kind>" (if first of Kind)
+                          →  Server submits immediate reconciliation process
+colonies blueprint update →  Server submits immediate reconciliation process
+colonies blueprint remove →  Server deletes cron only if last blueprint of Kind
 ```
+
+**Key Benefit**: 100 blueprints = 1 cron (not 100 crons!)
 
 ### 2. Cron Configuration
 
-Each blueprint gets one cron with these settings:
-- **Name**: `reconcile-<blueprintName>`
+Each Kind (e.g., ExecutorDeployment, DockerDeployment) gets one consolidated cron:
+- **Name**: `reconcile-<Kind>` (e.g., "reconcile-ExecutorDeployment")
 - **Interval**: 60 seconds (periodic self-healing)
 - **WaitForPrevProcessGraph**: `true` (prevents concurrent reconciliation)
-- **WorkflowSpec**: Single function that fetches and reconciles the blueprint
+- **WorkflowSpec**: Single function that fetches ALL blueprints of that Kind and reconciles them in parallel
 
-### 3. Reconciliation Process
+### 3. Reconciliation Modes
 
+The reconciler supports two modes:
+
+#### Periodic Consolidated Reconciliation (Cron-triggered)
 ```mermaid
 flowchart LR
-    A[Cron Fires] --> B[Create Process]
+    A[Cron Fires] --> B[Create Process with Kind]
     B --> C[Executor Pulls]
-    C --> D[Fetch Blueprint]
+    C --> D[Fetch ALL Blueprints of Kind]
+    D --> E[Reconcile in Parallel]
+    E --> F[Aggregate Results]
+    F --> G[Close Process]
+```
+
+#### Immediate Single-Blueprint Reconciliation (On create/update)
+```mermaid
+flowchart LR
+    A[Blueprint Created/Updated] --> B[Create Process with BlueprintName]
+    B --> C[Executor Pulls]
+    C --> D[Fetch Single Blueprint]
     D --> E{Needs Reconciliation?}
     E -->|No| F[Close Process]
     E -->|Yes| G[Reconcile]
@@ -39,8 +56,9 @@ flowchart LR
 ```
 
 **Key Points:**
-- Executor **fetches** blueprint from server (not embedded in process)
-- Early exit if no work needed (optimization)
+- **Parallel execution**: When cron triggers, all blueprints of that Kind are reconciled in parallel
+- **Scalable**: 100 blueprints with 60-second interval = 1 process every 60 seconds (not 100!)
+- Executor **fetches** blueprints from server (not embedded in process)
 - Always operates on latest blueprint state
 - Status reported back to update blueprint
 
@@ -86,22 +104,22 @@ flowchart LR
 - ✅ `process_handler.go` - Fetches blueprint and reconciles
 - ✅ `reconciliation_helpers.go` - Status checking utilities
 
-## Example: Creating a Blueprint
+## Example: Creating First Blueprint of a Kind
 
 ```bash
-# User creates blueprint
+# User creates first ExecutorDeployment blueprint
 colonies blueprint add --spec deployment.json
 
 # Server automatically:
 # 1. Stores blueprint (generation 1)
-# 2. Creates cron: "reconcile-deployment"
-# 3. Triggers cron immediately
+# 2. Creates consolidated cron: "reconcile-ExecutorDeployment" (first of Kind)
+# 3. Submits immediate reconciliation process
 
-# Cron creates process:
+# Immediate process created:
 {
   "funcName": "reconcile",
   "kwargs": {
-    "blueprintName": "deployment"
+    "blueprintName": "deployment"  // Single blueprint
   }
 }
 
@@ -114,6 +132,39 @@ colonies blueprint add --spec deployment.json
 # 6. Reports status back
 ```
 
+## Example: Creating Additional Blueprints
+
+```bash
+# User creates second ExecutorDeployment blueprint
+colonies blueprint add --spec deployment2.json
+
+# Server automatically:
+# 1. Stores blueprint (generation 1)
+# 2. Cron "reconcile-ExecutorDeployment" already exists - reuses it
+# 3. Submits immediate reconciliation process for just this blueprint
+
+# No new cron created - scales to hundreds of blueprints!
+```
+
+## Example: Periodic Reconciliation (Cron-triggered)
+
+```bash
+# Every 60 seconds, cron fires:
+{
+  "funcName": "reconcile",
+  "kwargs": {
+    "kind": "ExecutorDeployment"  // ALL blueprints of this Kind
+  }
+}
+
+# Executor:
+# 1. Pulls process
+# 2. Fetches ALL ExecutorDeployment blueprints from server
+# 3. Reconciles each blueprint in PARALLEL
+# 4. Aggregates results
+# 5. Closes process with combined status
+```
+
 ## Example: Updating a Blueprint
 
 ```bash
@@ -122,9 +173,8 @@ colonies blueprint update --spec deployment.json
 
 # Server automatically:
 # 1. Updates blueprint (generation 2)
-# 2. Triggers existing cron immediately
+# 2. Submits immediate reconciliation process for this specific blueprint
 
-# Same reconciliation process as above
 # Executor fetches gen 2 blueprint and updates containers
 ```
 
@@ -204,15 +254,33 @@ colonies process get --processid <id>
 
 ## Comparison with Old Architecture
 
-| Feature | Old (Background Loops) | New (Cron-Based) |
-|---------|----------------------|------------------|
-| State tracking | In-memory map | None (stateless) |
-| Reconciliation trigger | Background ticker + processes | Server crons only |
-| Startup behavior | Scan all blueprints | None - wait for cron |
-| HA support | Conflicts between executors | Safe - sequential execution |
-| Blueprint updates | Two functions | One function |
-| Code complexity | ~500 lines | ~200 lines |
+| Feature | Old (Per-Blueprint Cron) | New (Consolidated Cron) |
+|---------|------------------------|-------------------------|
+| Cron count | 1 cron per blueprint | 1 cron per Kind |
+| Scalability | 100 blueprints = 100 crons | 100 blueprints = 1 cron |
+| Processes per minute | N blueprints × 1 process | 1 process (parallel) |
+| State tracking | None (stateless) | None (stateless) |
+| HA support | Safe - sequential execution | Safe - parallel within process |
+| Immediate updates | Trigger cron | Submit single-blueprint process |
+
+## Scalability
+
+The consolidated cron architecture provides excellent scalability:
+
+| Blueprints | Old: Processes/minute | New: Processes/minute | Improvement |
+|------------|----------------------|----------------------|-------------|
+| 10 | 10 | 1 | 10x |
+| 100 | 100 | 1 | 100x |
+| 1000 | 1000 | 1 | 1000x |
+
+Within each cron-triggered process, all blueprints are reconciled **in parallel**, so the wall-clock time remains constant regardless of blueprint count.
 
 ## Summary
 
-The cron-based architecture is **simpler, more correct, and easier to operate**. All intelligence lives server-side, and executors are pure reactive workers. This follows the best practices for distributed systems: stateless, idempotent, and server-driven.
+The consolidated cron architecture is **simpler, more scalable, and easier to operate**. Key improvements:
+- **One cron per Kind** instead of per blueprint
+- **Parallel reconciliation** of all blueprints within a single process
+- **Immediate single-blueprint reconciliation** for create/update operations
+- **Automatic cleanup** when blueprints are deleted
+
+All intelligence lives server-side, and executors are pure reactive workers. This follows the best practices for distributed systems: stateless, idempotent, and server-driven.
