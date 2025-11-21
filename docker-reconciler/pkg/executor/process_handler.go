@@ -1,22 +1,150 @@
 package executor
 
 import (
+	"sync"
+
 	"github.com/colonyos/colonies/pkg/core"
 	log "github.com/sirupsen/logrus"
 )
 
-// handleReconcile processes a reconciliation request by fetching the blueprint from server
-// This is used by cron-based reconciliation where the blueprint name is passed as an argument
+// handleReconcile processes a reconciliation request
+// Supports two modes:
+// 1. Single blueprint: when "blueprintName" kwarg is present
+// 2. Consolidated: when "kind" kwarg is present - fetches all blueprints of that Kind and reconciles in parallel
 func (e *Executor) handleReconcile(process *core.Process) {
 	log.WithFields(log.Fields{"ProcessID": process.ID}).Info("Handling blueprint reconciliation")
 
-	// Extract blueprint name from process kwargs
-	blueprintName, ok := process.FunctionSpec.KwArgs["blueprintName"].(string)
-	if !ok {
-		e.failProcess(process, "Blueprint name not found in process kwargs")
+	// Check if this is a consolidated reconciliation (by Kind)
+	if kind, ok := process.FunctionSpec.KwArgs["kind"].(string); ok {
+		e.handleConsolidatedReconcile(process, kind)
 		return
 	}
 
+	// Single blueprint reconciliation
+	blueprintName, ok := process.FunctionSpec.KwArgs["blueprintName"].(string)
+	if !ok {
+		e.failProcess(process, "Neither 'kind' nor 'blueprintName' found in process kwargs")
+		return
+	}
+
+	e.reconcileSingleBlueprint(process, blueprintName, true)
+}
+
+// handleConsolidatedReconcile fetches all blueprints of a Kind and reconciles them in parallel
+func (e *Executor) handleConsolidatedReconcile(process *core.Process, kind string) {
+	log.WithFields(log.Fields{
+		"ProcessID": process.ID,
+		"Kind":      kind,
+	}).Info("Consolidated reconciliation for Kind")
+
+	// Fetch all blueprints of this Kind from server
+	blueprints, err := e.client.GetBlueprints(e.colonyName, kind, e.colonyPrvKey)
+	if err != nil {
+		e.failProcess(process, "Failed to fetch blueprints for kind "+kind+": "+err.Error())
+		return
+	}
+
+	if len(blueprints) == 0 {
+		log.WithFields(log.Fields{"Kind": kind}).Info("No blueprints found for Kind")
+		e.client.Close(process.ID, e.executorPrvKey)
+		return
+	}
+
+	log.WithFields(log.Fields{
+		"Kind":  kind,
+		"Count": len(blueprints),
+	}).Info("Found blueprints to reconcile")
+
+	// Reconcile all blueprints in parallel
+	var wg sync.WaitGroup
+	results := make(chan map[string]interface{}, len(blueprints))
+
+	for _, blueprint := range blueprints {
+		wg.Add(1)
+		go func(bp *core.Blueprint) {
+			defer wg.Done()
+			result := e.reconcileBlueprintParallel(bp)
+			results <- result
+		}(blueprint)
+	}
+
+	// Wait for all reconciliations to complete
+	wg.Wait()
+	close(results)
+
+	// Collect results
+	var allResults []interface{}
+	for result := range results {
+		allResults = append(allResults, result)
+	}
+
+	// Close with aggregated results
+	output := []interface{}{
+		map[string]interface{}{
+			"kind":    kind,
+			"count":   len(blueprints),
+			"results": allResults,
+		},
+	}
+
+	if err := e.client.CloseWithOutput(process.ID, output, e.executorPrvKey); err != nil {
+		log.WithFields(log.Fields{"Error": err}).Error("Failed to close consolidated reconcile process")
+	} else {
+		log.WithFields(log.Fields{
+			"Kind":  kind,
+			"Count": len(blueprints),
+		}).Info("Consolidated reconciliation completed")
+	}
+}
+
+// reconcileBlueprintParallel reconciles a single blueprint and returns the result (for parallel execution)
+func (e *Executor) reconcileBlueprintParallel(blueprint *core.Blueprint) map[string]interface{} {
+	result := map[string]interface{}{
+		"blueprintName": blueprint.Metadata.Name,
+		"success":       false,
+	}
+
+	// Check if reconciliation needed
+	needsReconciliation, reason := e.checkReconciliationNeeded(blueprint)
+	if !needsReconciliation {
+		// Collect status even if no reconciliation needed
+		status, err := e.reconciler.CollectStatus(blueprint)
+		if err != nil {
+			result["error"] = "Failed to collect status: " + err.Error()
+			return result
+		}
+		result["success"] = true
+		result["status"] = status
+		result["action"] = "status_updated"
+		return result
+	}
+
+	log.WithFields(log.Fields{
+		"BlueprintName": blueprint.Metadata.Name,
+		"Reason":        reason,
+	}).Info("Reconciliation needed")
+
+	// Perform reconciliation (using nil process since we don't want per-blueprint process tracking)
+	if err := e.reconciler.Reconcile(nil, blueprint); err != nil {
+		result["error"] = "Reconciliation failed: " + err.Error()
+		return result
+	}
+
+	// Collect status after reconciliation
+	status, err := e.reconciler.CollectStatus(blueprint)
+	if err != nil {
+		result["error"] = "Failed to collect status after reconcile: " + err.Error()
+		return result
+	}
+
+	result["success"] = true
+	result["status"] = status
+	result["action"] = "reconciled"
+	return result
+}
+
+// reconcileSingleBlueprint reconciles a single blueprint by name
+func (e *Executor) reconcileSingleBlueprint(process *core.Process, blueprintName string, closeProcess bool) {
 	// Fetch current blueprint from server
 	blueprint, err := e.client.GetBlueprint(e.colonyName, blueprintName, e.colonyPrvKey)
 	if err != nil {
@@ -37,35 +165,23 @@ func (e *Executor) handleReconcile(process *core.Process) {
 			"BlueprintName": blueprint.Metadata.Name,
 		}).Info("Blueprint already at desired state, skipping reconciliation")
 
-		// Even though no work is needed, collect and report current status
-		// to keep the blueprint status up-to-date
+		// Collect and report current status
 		status, err := e.reconciler.CollectStatus(blueprint)
 		if err != nil {
 			log.WithFields(log.Fields{"Error": err}).Warn("Failed to collect status")
-			// Close without status
-			if err := e.client.Close(process.ID, e.executorPrvKey); err != nil {
-				log.WithFields(log.Fields{"ProcessID": process.ID, "Error": err}).Error("Failed to close process")
+			if closeProcess {
+				e.client.Close(process.ID, e.executorPrvKey)
 			}
 			return
 		}
 
-		// Close with status to update blueprint status field
-		// Note: We don't include metadata.lastReconciliationProcess anymore
-		// as it's now only updated by the cron controller when creating the process
-		output := []interface{}{
-			map[string]interface{}{
-				"status": status,
-			},
-		}
-
-		if err := e.client.CloseWithOutput(process.ID, output, e.executorPrvKey); err != nil {
-			log.WithFields(log.Fields{"Error": err}).Error("Failed to close process with output")
-		} else {
-			log.WithFields(log.Fields{
-				"BlueprintName":    blueprint.Metadata.Name,
-				"Generation":       blueprint.Metadata.Generation,
-				"RunningInstances": status["runningInstances"],
-			}).Info("Status updated successfully (no reconciliation needed)")
+		if closeProcess {
+			output := []interface{}{
+				map[string]interface{}{
+					"status": status,
+				},
+			}
+			e.client.CloseWithOutput(process.ID, output, e.executorPrvKey)
 		}
 		return
 	}
@@ -86,30 +202,27 @@ func (e *Executor) handleReconcile(process *core.Process) {
 	status, err := e.reconciler.CollectStatus(blueprint)
 	if err != nil {
 		log.WithFields(log.Fields{"Error": err}).Warn("Failed to collect status")
-		// Close without status
-		if err := e.client.Close(process.ID, e.executorPrvKey); err != nil {
-			log.WithFields(log.Fields{"ProcessID": process.ID, "Error": err}).Error("Failed to close process")
+		if closeProcess {
+			e.client.Close(process.ID, e.executorPrvKey)
 		}
 		return
 	}
 
-	// Close with status output
-	// Note: We don't include metadata.lastReconciliationProcess anymore
-	// as it's now only updated by the cron controller when creating the process
-	output := []interface{}{
-		map[string]interface{}{
-			"status": status,
-		},
-	}
-
-	if err := e.client.CloseWithOutput(process.ID, output, e.executorPrvKey); err != nil {
-		log.WithFields(log.Fields{"Error": err}).Error("Failed to close process with output")
-	} else {
-		log.WithFields(log.Fields{
-			"BlueprintName":    blueprint.Metadata.Name,
-			"Generation":       blueprint.Metadata.Generation,
-			"RunningInstances": status["runningInstances"],
-		}).Info("Reconciliation completed successfully")
+	if closeProcess {
+		output := []interface{}{
+			map[string]interface{}{
+				"status": status,
+			},
+		}
+		if err := e.client.CloseWithOutput(process.ID, output, e.executorPrvKey); err != nil {
+			log.WithFields(log.Fields{"Error": err}).Error("Failed to close process with output")
+		} else {
+			log.WithFields(log.Fields{
+				"BlueprintName":    blueprint.Metadata.Name,
+				"Generation":       blueprint.Metadata.Generation,
+				"RunningInstances": status["runningInstances"],
+			}).Info("Reconciliation completed successfully")
+		}
 	}
 }
 
