@@ -9,6 +9,9 @@
     }
   },
   "kind": "DockerDeployment",
+  "handler": {
+    "executorName": "local-docker-reconciler"
+  },
   "spec": {
     "replicas": 1,
     "instances": [
