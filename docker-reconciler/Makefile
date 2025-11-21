@@ -2,7 +2,7 @@ all: build
 .PHONY: all build container push clean buildx-setup multiplatform multiplatform-push
 
 BUILD_IMAGE ?= colonyos/docker-reconciler
-PUSH_IMAGE ?= colonyos/docker-reconciler:v1.0.5
+PUSH_IMAGE ?= colonyos/docker-reconciler:v1.0.6
 PLATFORMS ?= linux/amd64,linux/arm64
 
 VERSION := $(shell git rev-parse --short HEAD)
