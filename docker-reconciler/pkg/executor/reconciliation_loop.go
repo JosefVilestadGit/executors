@@ -13,6 +13,9 @@ import (
 func (e *Executor) ServeForEver() error {
 	log.Info("Starting reconciler in stateless mode (cron-driven)")
 
+	// Perform startup reconciliation of all blueprints
+	e.performStartupReconciliation()
+
 	// Main process assignment loop
 	for {
 		process, err := e.assignNextProcess()
@@ -73,4 +76,92 @@ func (e *Executor) handleUnsupportedFunction(process *core.Process) {
 	if err != nil {
 		log.WithFields(log.Fields{"ProcessId": process.ID, "Error": err}).Error("Failed to close process as failed")
 	}
+}
+
+// performStartupReconciliation reconciles all blueprints on startup
+func (e *Executor) performStartupReconciliation() {
+	log.Info("Performing startup reconciliation of all blueprints")
+
+	// Get all blueprints in the colony
+	blueprints, err := e.client.GetBlueprints(e.colonyName, "", e.colonyPrvKey)
+	if err != nil {
+		log.WithFields(log.Fields{"Error": err}).Error("Failed to fetch blueprints for startup reconciliation")
+		return
+	}
+
+	if len(blueprints) == 0 {
+		log.Info("No blueprints found for startup reconciliation")
+		return
+	}
+
+	log.WithFields(log.Fields{"Count": len(blueprints)}).Info("Starting reconciliation of all blueprints")
+
+	// Reconcile each blueprint
+	reconciledCount := 0
+	for _, blueprint := range blueprints {
+		log.WithFields(log.Fields{
+			"BlueprintName": blueprint.Metadata.Name,
+			"Kind":          blueprint.Kind,
+		}).Info("Reconciling blueprint on startup")
+
+		// Check if reconciliation is needed
+		needsReconciliation, reason := e.checkReconciliationNeeded(blueprint)
+		if !needsReconciliation {
+			// Just collect and update status
+			status, err := e.reconciler.CollectStatus(blueprint)
+			if err != nil {
+				log.WithFields(log.Fields{
+					"BlueprintName": blueprint.Metadata.Name,
+					"Error":         err,
+				}).Warning("Failed to collect status on startup")
+			} else {
+				// Update blueprint status on the server
+				if err := e.reconciler.UpdateBlueprintStatus(blueprint, status); err != nil {
+					log.WithFields(log.Fields{
+						"BlueprintName": blueprint.Metadata.Name,
+						"Error":         err,
+					}).Warning("Failed to update blueprint status on startup")
+				}
+				log.WithFields(log.Fields{
+					"BlueprintName": blueprint.Metadata.Name,
+					"Status":        status,
+				}).Debug("Blueprint status updated on startup")
+			}
+			continue
+		}
+
+		log.WithFields(log.Fields{
+			"BlueprintName": blueprint.Metadata.Name,
+			"Reason":        reason,
+		}).Info("Reconciliation needed on startup")
+
+		// Perform reconciliation without a process (startup mode)
+		if err := e.reconciler.Reconcile(nil, blueprint); err != nil {
+			log.WithFields(log.Fields{
+				"BlueprintName": blueprint.Metadata.Name,
+				"Error":         err,
+			}).Error("Startup reconciliation failed")
+		} else {
+			// Collect and update status after successful reconciliation
+			status, err := e.reconciler.CollectStatus(blueprint)
+			if err == nil {
+				if err := e.reconciler.UpdateBlueprintStatus(blueprint, status); err != nil {
+					log.WithFields(log.Fields{
+						"BlueprintName": blueprint.Metadata.Name,
+						"Error":         err,
+					}).Warning("Failed to update blueprint status after startup reconciliation")
+				}
+			}
+			reconciledCount++
+			log.WithFields(log.Fields{
+				"BlueprintName": blueprint.Metadata.Name,
+			}).Info("Startup reconciliation completed")
+		}
+	}
+
+	log.WithFields(log.Fields{
+		"Total":       len(blueprints),
+		"Reconciled":  reconciledCount,
+		"UpToDate":    len(blueprints) - reconciledCount,
+	}).Info("Startup reconciliation completed")
 }

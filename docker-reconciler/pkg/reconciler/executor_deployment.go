@@ -9,6 +9,7 @@ import (
 
 	"github.com/colonyos/colonies/pkg/core"
 	"github.com/colonyos/colonies/pkg/security/crypto"
+	"github.com/colonyos/executors/docker-reconciler/pkg/hwdetect"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
@@ -48,6 +49,7 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, blueprin
 
 	// Pull the container image
 	if err := r.pullImage(process, spec.Image); err != nil {
+		r.addLog(process, fmt.Sprintf("ERROR: Failed to pull image %s: %v", spec.Image, err))
 		return fmt.Errorf("failed to pull image: %w", err)
 	}
 
@@ -104,7 +106,7 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, blueprin
 
 			// Recreate the container with new spec and generation
 			if err := r.startContainer(process, spec, containerName, blueprint); err != nil {
-				r.addLog(process, fmt.Sprintf("Error recreating container %s: %v", containerName, err))
+				r.addLog(process, fmt.Sprintf("ERROR: Failed to recreate container %s: %v", containerName, err))
 				return fmt.Errorf("failed to recreate container %s: %w", containerName, err)
 			}
 			r.addLog(process, fmt.Sprintf("Recreated container: %s with generation %d", containerName, blueprint.Metadata.Generation))
@@ -151,7 +153,7 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, blueprin
 			}
 
 			if err := r.startContainer(process, spec, containerName, blueprint); err != nil {
-				r.addLog(process, fmt.Sprintf("Error starting container %s: %v", containerName, err))
+				r.addLog(process, fmt.Sprintf("ERROR: Failed to start container %s: %v", containerName, err))
 				return fmt.Errorf("failed to start container %s: %w", containerName, err)
 			}
 			r.addLog(process, fmt.Sprintf("Started container: %s", containerName))
@@ -336,12 +338,15 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 		// executorType was already determined above from spec.ExecutorType
 		// Append generation number to executor name for unique identification across generations
 		executorName := fmt.Sprintf("%s-%d", containerName, blueprint.Metadata.Generation)
-		executor := core.CreateExecutor(executorID, executorType, executorName, r.colonyName, time.Now(), time.Now())
+		newExecutor := core.CreateExecutor(executorID, executorType, executorName, r.colonyName, time.Now(), time.Now())
 
-		// Set location from reconciler (inherits from parent)
-		executor.Location = core.Location{Description: r.location}
+		// Populate hardware capabilities (inherits from reconciler's host)
+		hwdetect.PopulateExecutorCapabilities(newExecutor)
 
-		addedExecutor, err := r.client.AddExecutor(executor, r.colonyOwnerKey)
+		// Override location with reconciler's location setting
+		newExecutor.Location = core.Location{Description: r.location}
+
+		addedExecutor, err := r.client.AddExecutor(newExecutor, r.colonyOwnerKey)
 		if err != nil {
 			return fmt.Errorf("failed to register executor %s: %w", containerName, err)
 		}

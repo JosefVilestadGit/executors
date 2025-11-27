@@ -25,6 +25,18 @@ func (r *Reconciler) pullImage(process *core.Process, image string) error {
 	}
 
 	// Image doesn't exist, pull it
+	return r.doPullImage(process, image)
+}
+
+// forcePullImage always pulls a container image from a registry, even if it exists locally
+// This is used during force reconciliation to ensure we get the latest image
+func (r *Reconciler) forcePullImage(process *core.Process, image string) error {
+	r.addLog(process, fmt.Sprintf("Force pulling image (ignoring local cache): %s", image))
+	return r.doPullImage(process, image)
+}
+
+// doPullImage performs the actual image pull
+func (r *Reconciler) doPullImage(process *core.Process, image string) error {
 	r.addLog(process, fmt.Sprintf("Pulling image: %s", image))
 
 	logChan := make(chan docker.LogMessage, 100)
@@ -157,6 +169,46 @@ func (r *Reconciler) stopAndRemoveContainer(containerID string) error {
 
 	// Remove the container
 	return r.dockerClient.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
+}
+
+// forceRemoveContainer stops, removes a container and deregisters its executor (for ExecutorDeployments)
+func (r *Reconciler) forceRemoveContainer(process *core.Process, containerID string, blueprint *core.Blueprint) error {
+	ctx := context.Background()
+
+	// Inspect container to get name and generation
+	inspect, err := r.dockerClient.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("failed to inspect container: %w", err)
+	}
+
+	containerName := inspect.Name
+	if len(containerName) > 0 && containerName[0] == '/' {
+		containerName = containerName[1:]
+	}
+
+	// For ExecutorDeployments, deregister the executor first
+	if blueprint.Kind == "ExecutorDeployment" {
+		containerGeneration := inspect.Config.Labels["colonies.generation"]
+		if containerGeneration != "" {
+			executorName := fmt.Sprintf("%s-%s", containerName, containerGeneration)
+			r.addLog(process, fmt.Sprintf("Deregistering executor: %s", executorName))
+
+			if err := r.client.RemoveExecutor(r.colonyName, executorName, r.colonyOwnerKey); err != nil {
+				r.addLog(process, fmt.Sprintf("Warning: Failed to deregister executor %s: %v", executorName, err))
+			} else {
+				r.addLog(process, fmt.Sprintf("Deregistered executor: %s", executorName))
+			}
+		}
+	}
+
+	// Stop and remove the container
+	r.addLog(process, fmt.Sprintf("Stopping and removing container: %s", containerName))
+	if err := r.stopAndRemoveContainer(containerID); err != nil {
+		return fmt.Errorf("failed to stop/remove container: %w", err)
+	}
+
+	r.addLog(process, fmt.Sprintf("Removed container: %s", containerName))
+	return nil
 }
 
 // findDirtyContainers checks which containers have an outdated generation

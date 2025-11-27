@@ -76,6 +76,7 @@ func (r *Reconciler) reconcileDockerDeployment(process *core.Process, blueprint 
 
 		// Pull the image
 		if err := r.pullImage(process, instance.Image); err != nil {
+			r.addLog(process, fmt.Sprintf("ERROR: Failed to pull image %s for instance %s: %v", instance.Image, instance.Name, err))
 			return fmt.Errorf("failed to pull image for instance %s: %w", instance.Name, err)
 		}
 
@@ -121,10 +122,12 @@ func (r *Reconciler) reconcileDockerDeployment(process *core.Process, blueprint 
 					if isDirty {
 						// Remove dirty container
 						if err := r.stopAndRemoveContainer(existingContainerID); err != nil {
+							r.addLog(process, fmt.Sprintf("ERROR: Failed to remove dirty container %s: %v", containerName, err))
 							return fmt.Errorf("failed to remove dirty container %s: %w", containerName, err)
 						}
 						// Create new container with custom name
 						if err := r.startDockerDeploymentInstanceWithName(process, instance, blueprint, containerName); err != nil {
+							r.addLog(process, fmt.Sprintf("ERROR: Failed to start instance %s: %v", containerName, err))
 							return fmt.Errorf("failed to start instance %s: %w", containerName, err)
 						}
 						r.addLog(process, fmt.Sprintf("Recreated container: %s with generation %d", containerName, blueprint.Metadata.Generation))
@@ -135,6 +138,7 @@ func (r *Reconciler) reconcileDockerDeployment(process *core.Process, blueprint 
 			} else {
 				// Container doesn't exist, create it
 				if err := r.startDockerDeploymentInstanceWithName(process, instance, blueprint, containerName); err != nil {
+					r.addLog(process, fmt.Sprintf("ERROR: Failed to start instance %s: %v", containerName, err))
 					return fmt.Errorf("failed to start instance %s: %w", containerName, err)
 				}
 				r.addLog(process, fmt.Sprintf("Created container: %s", containerName))

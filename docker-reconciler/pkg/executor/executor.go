@@ -2,8 +2,10 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,6 +33,7 @@ type Executor struct {
 	cancel             context.CancelFunc
 	client             *client.ColoniesClient
 	reconciler         *reconciler.Reconciler
+	logMu              sync.Mutex // Mutex for synchronizing log writes
 }
 
 // createColoniesExecutorWithKey creates a new executor with generated keys
@@ -49,7 +52,7 @@ func (e *Executor) createColoniesExecutorWithKey(colonyName string) (*core.Execu
 	executor := core.CreateExecutor(executorID, e.executorType, e.executorName, colonyName, time.Now(), time.Now())
 
 	// Populate executor capabilities with auto-detected hardware info
-	populateExecutorCapabilities(executor)
+	PopulateExecutorCapabilities(executor)
 
 	return executor, executorID, executorPrvKey, nil
 }
@@ -155,3 +158,23 @@ func (e *Executor) Shutdown() error {
 }
 
 // Note: ServeForEver is now in reconciliation_loop.go
+
+// addProcessLog adds a log message to the process for visibility via `colonies log get`
+// The message is formatted with a timestamp to match logrus style
+// This method is thread-safe and can be called from multiple goroutines
+func (e *Executor) addProcessLog(process *core.Process, message string) {
+	log.Info(message)
+	if e.client != nil && process != nil {
+		// Lock to ensure log messages are written atomically and in order
+		e.logMu.Lock()
+		defer e.logMu.Unlock()
+
+		// Format with timestamp to match logrus style: time="2006-01-02T15:04:05Z07:00" level=info msg="message"
+		timestamp := time.Now().Format(time.RFC3339)
+		formattedMsg := fmt.Sprintf("time=\"%s\" level=info msg=\"%s\"\n", timestamp, message)
+		err := e.client.AddLog(process.ID, formattedMsg, e.executorPrvKey)
+		if err != nil {
+			log.WithFields(log.Fields{"Error": err}).Debug("Failed to add log to process")
+		}
+	}
+}

@@ -124,12 +124,24 @@ func (r *Reconciler) scaleDown(blueprint *core.Blueprint, current, desired int) 
 
 		// Deregister executor BEFORE stopping container (if it's an ExecutorDeployment)
 		if blueprint.Kind == "ExecutorDeployment" && containerName != "" {
+			// Get the generation from the container's label, not the blueprint
+			// The executor was registered with the generation at the time the container was created
+			containerGeneration := cont.Labels["colonies.generation"]
+			if containerGeneration == "" {
+				// Fallback to blueprint generation if label not found (shouldn't happen)
+				containerGeneration = fmt.Sprintf("%d", blueprint.Metadata.Generation)
+				log.WithFields(log.Fields{
+					"ContainerName": containerName,
+				}).Warn("Container missing colonies.generation label, using blueprint generation")
+			}
+
 			// Executor name includes generation suffix (e.g., "docker-executor-abc-5")
-			executorName := fmt.Sprintf("%s-%d", containerName, blueprint.Metadata.Generation)
+			executorName := fmt.Sprintf("%s-%s", containerName, containerGeneration)
 
 			log.WithFields(log.Fields{
-				"ExecutorName": executorName,
-				"ContainerID":  truncateID(containerID, 12),
+				"ExecutorName":        executorName,
+				"ContainerID":         truncateID(containerID, 12),
+				"ContainerGeneration": containerGeneration,
 			}).Info("Self-healing: deregistering executor before stopping container")
 
 			if err := r.client.RemoveExecutor(r.colonyName, executorName, r.colonyOwnerKey); err != nil {

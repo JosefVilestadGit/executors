@@ -2,7 +2,6 @@ package executor
 
 import (
 	"runtime"
-	"strconv"
 	"testing"
 
 	"github.com/colonyos/colonies/pkg/core"
@@ -11,7 +10,7 @@ import (
 
 func TestPopulateExecutorCapabilities(t *testing.T) {
 	executor := &core.Executor{}
-	populateExecutorCapabilities(executor)
+	PopulateExecutorCapabilities(executor)
 
 	assert.NotEmpty(t, executor.Location.Description, "Location should be set")
 	assert.NotEmpty(t, executor.Capabilities.Hardware.Platform, "Platform should be detected")
@@ -93,16 +92,15 @@ func TestGPUInfo(t *testing.T) {
 
 func TestPopulateExecutorCapabilities_CPUCores(t *testing.T) {
 	executor := &core.Executor{}
-	populateExecutorCapabilities(executor)
+	PopulateExecutorCapabilities(executor)
 
-	// Verify CPU cores matches runtime detection
-	expectedCores := strconv.Itoa(runtime.NumCPU()) + " cores"
-	assert.Equal(t, expectedCores, executor.Capabilities.Hardware.CPU, "CPU should match runtime.NumCPU()")
+	// Verify CPU is set (either to model name or core count)
+	assert.NotEmpty(t, executor.Capabilities.Hardware.CPU, "CPU should be set")
 }
 
 func TestPopulateExecutorCapabilities_PlatformInfo(t *testing.T) {
 	executor := &core.Executor{}
-	populateExecutorCapabilities(executor)
+	PopulateExecutorCapabilities(executor)
 
 	// Verify platform and architecture match runtime
 	assert.Equal(t, runtime.GOOS, executor.Capabilities.Hardware.Platform, "Platform should match runtime.GOOS")
@@ -111,7 +109,7 @@ func TestPopulateExecutorCapabilities_PlatformInfo(t *testing.T) {
 
 func TestPopulateExecutorCapabilities_GPU(t *testing.T) {
 	executor := &core.Executor{}
-	populateExecutorCapabilities(executor)
+	PopulateExecutorCapabilities(executor)
 
 	// GPU count should be non-negative
 	assert.GreaterOrEqual(t, executor.Capabilities.Hardware.GPU.Count, 0, "GPU count should be non-negative")

@@ -77,3 +77,12 @@ func (r *Reconciler) GetDeploymentStatus(deploymentName string) (map[string]inte
 
 	return status, nil
 }
+
+// UpdateBlueprintStatus updates the status of a blueprint on the server
+// This is called after each reconciliation to report the current state
+func (r *Reconciler) UpdateBlueprintStatus(blueprint *core.Blueprint, status map[string]interface{}) error {
+	if r.client == nil {
+		return nil
+	}
+	return r.client.UpdateBlueprintStatus(r.colonyName, blueprint.Metadata.Name, status, r.executorPrvKey)
+}

@@ -1,6 +1,7 @@
 package reconciler
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -154,4 +155,85 @@ func (r *Reconciler) Reconcile(process *core.Process, blueprint *core.Blueprint)
 	default:
 		return fmt.Errorf("unsupported blueprint kind: %s", blueprint.Kind)
 	}
+}
+
+// ForceReconcile forces recreation of all containers for a blueprint
+// This is useful when you want to restart containers with a new image (same tag)
+func (r *Reconciler) ForceReconcile(process *core.Process, blueprint *core.Blueprint) error {
+	log.WithFields(log.Fields{
+		"ResourceName": blueprint.Metadata.Name,
+		"ResourceKind": blueprint.Kind,
+	}).Info("Starting FORCE reconciliation - will recreate all containers")
+
+	r.addLog(process, fmt.Sprintf("Force reconciling %s - will pull fresh image and recreate all containers", blueprint.Metadata.Name))
+
+	// Extract image(s) from blueprint and force pull them first
+	images, err := r.extractImagesFromBlueprint(blueprint)
+	if err != nil {
+		r.addLog(process, fmt.Sprintf("Warning: Failed to extract images from blueprint: %v", err))
+	} else {
+		for _, image := range images {
+			if err := r.forcePullImage(process, image); err != nil {
+				r.addLog(process, fmt.Sprintf("Warning: Failed to force pull image %s: %v", image, err))
+				// Continue anyway - the image might still work if it exists locally
+			}
+		}
+	}
+
+	// Get all existing containers for this blueprint
+	existingContainers, err := r.listContainersByLabel(blueprint.Metadata.Name)
+	if err != nil {
+		r.addLog(process, fmt.Sprintf("Warning: Failed to list existing containers: %v", err))
+		existingContainers = []string{}
+	}
+
+	r.addLog(process, fmt.Sprintf("Found %d existing container(s) to recreate", len(existingContainers)))
+
+	// Stop and remove all existing containers (deregistering executors if needed)
+	for _, containerID := range existingContainers {
+		if err := r.forceRemoveContainer(process, containerID, blueprint); err != nil {
+			r.addLog(process, fmt.Sprintf("Warning: Failed to remove container %s: %v", truncateID(containerID, 12), err))
+		}
+	}
+
+	// Now do a normal reconciliation to bring containers back up
+	r.addLog(process, "Starting containers with fresh image...")
+	return r.Reconcile(process, blueprint)
+}
+
+// extractImagesFromBlueprint extracts container image names from a blueprint spec
+func (r *Reconciler) extractImagesFromBlueprint(blueprint *core.Blueprint) ([]string, error) {
+	var images []string
+
+	specBytes, err := json.Marshal(blueprint.Spec)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal spec: %w", err)
+	}
+
+	switch blueprint.Kind {
+	case "ExecutorDeployment":
+		var spec DeploymentSpec
+		if err := json.Unmarshal(specBytes, &spec); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal ExecutorDeployment spec: %w", err)
+		}
+		if spec.Image != "" {
+			images = append(images, spec.Image)
+		}
+
+	case "DockerDeployment":
+		var spec DockerDeploymentSpec
+		if err := json.Unmarshal(specBytes, &spec); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal DockerDeployment spec: %w", err)
+		}
+		for _, instance := range spec.Instances {
+			if instance.Image != "" {
+				images = append(images, instance.Image)
+			}
+		}
+
+	default:
+		return nil, fmt.Errorf("unsupported blueprint kind: %s", blueprint.Kind)
+	}
+
+	return images, nil
 }

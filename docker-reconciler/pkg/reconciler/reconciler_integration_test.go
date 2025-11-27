@@ -735,6 +735,152 @@ func TestScaleDownDeregistration(t *testing.T) {
 	})
 }
 
+// TestExtractImagesFromBlueprint tests extracting images from different blueprint types
+func TestExtractImagesFromBlueprint(t *testing.T) {
+	reconciler := createTestReconciler(nil)
+
+	t.Run("Extract image from ExecutorDeployment", func(t *testing.T) {
+		blueprint := &core.Blueprint{
+			Kind: "ExecutorDeployment",
+			Metadata: core.BlueprintMetadata{
+				Name: "test-executor",
+			},
+			Spec: map[string]interface{}{
+				"image":    "nginx:latest",
+				"replicas": float64(3),
+			},
+		}
+
+		images, err := reconciler.extractImagesFromBlueprint(blueprint)
+		assert.NoError(t, err)
+		assert.Len(t, images, 1)
+		assert.Equal(t, "nginx:latest", images[0])
+	})
+
+	t.Run("Extract images from DockerDeployment", func(t *testing.T) {
+		blueprint := &core.Blueprint{
+			Kind: "DockerDeployment",
+			Metadata: core.BlueprintMetadata{
+				Name: "test-docker-deployment",
+			},
+			Spec: map[string]interface{}{
+				"instances": []interface{}{
+					map[string]interface{}{
+						"name":  "web",
+						"image": "nginx:1.21",
+					},
+					map[string]interface{}{
+						"name":  "redis",
+						"image": "redis:7",
+					},
+					map[string]interface{}{
+						"name":  "postgres",
+						"image": "postgres:15",
+					},
+				},
+			},
+		}
+
+		images, err := reconciler.extractImagesFromBlueprint(blueprint)
+		assert.NoError(t, err)
+		assert.Len(t, images, 3)
+		assert.Contains(t, images, "nginx:1.21")
+		assert.Contains(t, images, "redis:7")
+		assert.Contains(t, images, "postgres:15")
+	})
+
+	t.Run("Handle ExecutorDeployment without image", func(t *testing.T) {
+		blueprint := &core.Blueprint{
+			Kind: "ExecutorDeployment",
+			Metadata: core.BlueprintMetadata{
+				Name: "test-no-image",
+			},
+			Spec: map[string]interface{}{
+				"replicas": float64(1),
+			},
+		}
+
+		images, err := reconciler.extractImagesFromBlueprint(blueprint)
+		assert.NoError(t, err)
+		assert.Len(t, images, 0)
+	})
+
+	t.Run("Handle unsupported blueprint kind", func(t *testing.T) {
+		blueprint := &core.Blueprint{
+			Kind: "UnsupportedKind",
+			Metadata: core.BlueprintMetadata{
+				Name: "test-unsupported",
+			},
+			Spec: map[string]interface{}{},
+		}
+
+		images, err := reconciler.extractImagesFromBlueprint(blueprint)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported blueprint kind")
+		assert.Nil(t, images)
+	})
+}
+
+// TestForceReconcileListsContainers tests that ForceReconcile properly lists containers for removal
+func TestForceReconcileListsContainers(t *testing.T) {
+	mockDocker := new(MockDockerClient)
+	reconciler := createTestReconciler(mockDocker)
+
+	// Existing containers (will be removed during force reconcile)
+	existingContainers := []types.Container{
+		{
+			ID:    "existing-1",
+			Names: []string{"/force-test-abc"},
+			State: "running",
+			Labels: map[string]string{
+				"colonies.managed":    "true",
+				"colonies.deployment": "force-test",
+				"colonies.generation": "1",
+			},
+		},
+	}
+
+	// First call to list containers (for force removal)
+	mockDocker.On("ContainerList", mock.Anything, mock.MatchedBy(func(opts container.ListOptions) bool {
+		return opts.All == true // Force reconcile lists ALL containers
+	})).Return(existingContainers, nil).Once()
+
+	// Mock ContainerInspect for the existing container
+	mockDocker.On("ContainerInspect", mock.Anything, "existing-1").Return(types.ContainerJSON{
+		ContainerJSONBase: &types.ContainerJSONBase{
+			ID:   "existing-1",
+			Name: "/force-test-abc",
+		},
+		Config: &container.Config{
+			Labels: map[string]string{
+				"colonies.generation": "1",
+			},
+		},
+	}, nil)
+
+	// Mock stop and remove for force cleanup
+	mockDocker.On("ContainerStop", mock.Anything, "existing-1", mock.Anything).Return(nil)
+	mockDocker.On("ContainerRemove", mock.Anything, "existing-1", mock.Anything).Return(nil)
+
+	// Mock image check (image exists locally)
+	mockDocker.On("ImageInspectWithRaw", mock.Anything, "test:latest").Return(types.ImageInspect{}, []byte{}, nil)
+
+	// After force removal, subsequent ContainerList calls for normal reconciliation
+	// Empty list since we removed the containers
+	mockDocker.On("ContainerList", mock.Anything, mock.Anything).Return([]types.Container{}, nil)
+
+	// Mock for creating new containers
+	mockDocker.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(container.CreateResponse{ID: "new-container-1"}, nil)
+	mockDocker.On("ContainerStart", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	// Verify that the container list was called for force removal
+	containers, err := reconciler.listContainersByLabel("force-test")
+	assert.NoError(t, err)
+	assert.Len(t, containers, 1)
+	assert.Equal(t, "existing-1", containers[0])
+}
+
 // Benchmark tests
 func BenchmarkContainerList(b *testing.B) {
 	mockDocker := new(MockDockerClient)

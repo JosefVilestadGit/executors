@@ -1,6 +1,8 @@
 package reconciler
 
 import (
+	"sync"
+
 	"github.com/colonyos/colonies/pkg/client"
 	"github.com/colonyos/executors/common/pkg/docker"
 )
@@ -112,4 +114,5 @@ type Reconciler struct {
 	colonyOwnerKey string
 	colonyName     string
 	location       string
+	logMu          sync.Mutex // Mutex for synchronizing log writes
 }
