@@ -2,6 +2,7 @@ package executor
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/colonyos/colonies/pkg/core"
@@ -94,11 +95,33 @@ func (e *Executor) performStartupReconciliation() {
 		return
 	}
 
-	log.WithFields(log.Fields{"Count": len(blueprints)}).Info("Starting reconciliation of all blueprints")
+	// Filter blueprints that are assigned to this executor
+	var myBlueprints []*core.Blueprint
+	for _, blueprint := range blueprints {
+		if e.shouldHandleBlueprint(blueprint) {
+			myBlueprints = append(myBlueprints, blueprint)
+		} else {
+			log.WithFields(log.Fields{
+				"BlueprintName":   blueprint.Metadata.Name,
+				"HandlerExecutor": getHandlerExecutorName(blueprint),
+				"MyExecutorName":  e.executorName,
+			}).Debug("Skipping blueprint not assigned to this executor")
+		}
+	}
+
+	if len(myBlueprints) == 0 {
+		log.WithFields(log.Fields{
+			"TotalBlueprints": len(blueprints),
+			"ExecutorName":    e.executorName,
+		}).Info("No blueprints assigned to this executor for startup reconciliation")
+		return
+	}
+
+	log.WithFields(log.Fields{"Count": len(myBlueprints), "Total": len(blueprints)}).Info("Starting reconciliation of assigned blueprints")
 
 	// Reconcile each blueprint
 	reconciledCount := 0
-	for _, blueprint := range blueprints {
+	for _, blueprint := range myBlueprints {
 		log.WithFields(log.Fields{
 			"BlueprintName": blueprint.Metadata.Name,
 			"Kind":          blueprint.Kind,
@@ -160,8 +183,48 @@ func (e *Executor) performStartupReconciliation() {
 	}
 
 	log.WithFields(log.Fields{
-		"Total":       len(blueprints),
+		"Total":       len(myBlueprints),
 		"Reconciled":  reconciledCount,
-		"UpToDate":    len(blueprints) - reconciledCount,
+		"UpToDate":    len(myBlueprints) - reconciledCount,
 	}).Info("Startup reconciliation completed")
+}
+
+// shouldHandleBlueprint returns true if this executor should handle the given blueprint
+func (e *Executor) shouldHandleBlueprint(blueprint *core.Blueprint) bool {
+	if blueprint.Handler == nil {
+		// No handler specified - blueprints without handlers should not be reconciled by startup
+		return false
+	}
+
+	// Check single executor name
+	if blueprint.Handler.ExecutorName != "" {
+		return blueprint.Handler.ExecutorName == e.executorName
+	}
+
+	// Check list of executor names
+	if len(blueprint.Handler.ExecutorNames) > 0 {
+		for _, name := range blueprint.Handler.ExecutorNames {
+			if name == e.executorName {
+				return true
+			}
+		}
+		return false
+	}
+
+	// No executor name specified - don't handle it
+	return false
+}
+
+// getHandlerExecutorName returns the executor name from the blueprint handler for logging
+func getHandlerExecutorName(blueprint *core.Blueprint) string {
+	if blueprint.Handler == nil {
+		return "<no handler>"
+	}
+	if blueprint.Handler.ExecutorName != "" {
+		return blueprint.Handler.ExecutorName
+	}
+	if len(blueprint.Handler.ExecutorNames) > 0 {
+		return fmt.Sprintf("%v", blueprint.Handler.ExecutorNames)
+	}
+	return "<no executor specified>"
 }

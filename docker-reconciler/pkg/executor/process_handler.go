@@ -45,7 +45,7 @@ func (e *Executor) handleConsolidatedReconcile(process *core.Process, kind strin
 	}
 
 	// Fetch all blueprints of this Kind from server
-	blueprints, err := e.client.GetBlueprints(e.colonyName, kind, e.colonyPrvKey)
+	allBlueprints, err := e.client.GetBlueprints(e.colonyName, kind, e.colonyPrvKey)
 	if err != nil {
 		errMsg := fmt.Sprintf("Failed to fetch blueprints for kind %s: %v", kind, err)
 		e.addProcessLog(process, errMsg)
@@ -53,9 +53,23 @@ func (e *Executor) handleConsolidatedReconcile(process *core.Process, kind strin
 		return
 	}
 
+	// Filter blueprints that are assigned to this executor
+	var blueprints []*core.Blueprint
+	for _, blueprint := range allBlueprints {
+		if e.shouldHandleBlueprint(blueprint) {
+			blueprints = append(blueprints, blueprint)
+		} else {
+			log.WithFields(log.Fields{
+				"BlueprintName":   blueprint.Metadata.Name,
+				"HandlerExecutor": getHandlerExecutorName(blueprint),
+				"MyExecutorName":  e.executorName,
+			}).Debug("Skipping blueprint not assigned to this executor")
+		}
+	}
+
 	if len(blueprints) == 0 {
-		log.WithFields(log.Fields{"Kind": kind}).Info("No blueprints found for Kind")
-		e.addProcessLog(process, "No blueprints found for Kind: "+kind)
+		log.WithFields(log.Fields{"Kind": kind, "Total": len(allBlueprints)}).Info("No blueprints assigned to this executor for Kind")
+		e.addProcessLog(process, fmt.Sprintf("No blueprints assigned to this executor for Kind: %s (total: %d)", kind, len(allBlueprints)))
 		e.client.Close(process.ID, e.executorPrvKey)
 		return
 	}
@@ -63,8 +77,9 @@ func (e *Executor) handleConsolidatedReconcile(process *core.Process, kind strin
 	log.WithFields(log.Fields{
 		"Kind":  kind,
 		"Count": len(blueprints),
+		"Total": len(allBlueprints),
 	}).Info("Found blueprints to reconcile")
-	e.addProcessLog(process, fmt.Sprintf("Found %d blueprint(s) to reconcile", len(blueprints)))
+	e.addProcessLog(process, fmt.Sprintf("Found %d blueprint(s) to reconcile (of %d total)", len(blueprints), len(allBlueprints)))
 
 	// Reconcile all blueprints in parallel
 	var wg sync.WaitGroup
