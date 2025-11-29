@@ -50,28 +50,22 @@ services:
       COLONIES_COLONY_NAME: ${COLONIES_COLONY_NAME}
       COLONIES_COLONY_PRVKEY: ${COLONIES_COLONY_PRVKEY}
       COLONIES_PRVKEY: ${COLONIES_PRVKEY}
+      RECONCILER_NAME: ${COLONIES_EXECUTOR_NAME}
     networks:
       - colonies_default
     entrypoint: /bin/sh
     command: >
       -c "
-      echo 'Waiting for edge-docker-reconciler to register...';
+      echo \"Waiting for $${RECONCILER_NAME} to register...\";
       for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-        if colonies executor ls 2>/dev/null | grep -q edge-docker-reconciler; then
-          echo 'edge-docker-reconciler is registered';
+        if colonies executor ls 2>/dev/null | grep -q \"$${RECONCILER_NAME}\"; then
+          echo \"$${RECONCILER_NAME} is registered\";
           break;
         fi;
-        echo \"Attempt $$i: waiting for edge-docker-reconciler...\";
+        echo \"Attempt $$i: waiting for $${RECONCILER_NAME}...\";
         sleep 2;
       done;
-      echo 'Checking if edge-docker-executor blueprint exists...';
-      if colonies blueprint get --name edge-docker-executor >/dev/null 2>&1; then
-        echo 'Blueprint already exists, skipping add';
-      else
-        echo 'Adding edge-docker-executor deployment...';
-        colonies blueprint add --spec /blueprints/edge-docker-executor-deployment.json;
-      fi;
-      echo 'Edge init complete';
+      echo 'Init complete - reconciler will handle blueprints assigned to it';
       "
 
 networks:
