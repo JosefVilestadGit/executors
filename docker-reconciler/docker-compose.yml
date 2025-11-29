@@ -32,8 +32,10 @@ services:
       AWS_S3_BUCKET: ${AWS_S3_BUCKET}
       AWS_S3_TLS: ${AWS_S3_TLS}
       AWS_S3_SKIPVERIFY: ${AWS_S3_SKIPVERIFY}
-    networks:
-      - colonies_default
+
+      # Docker network for deployed containers (default: colonies_default)
+      DOCKER_NETWORK: ${DOCKER_NETWORK:-edge_default}
+    network_mode: host
 
   # Init container to add blueprint after reconciler is ready
   blueprint-init:
@@ -82,8 +84,3 @@ services:
       echo 'Blueprint init complete';
       "
 
-networks:
-  colonies_default:
-    # Use external network if it exists (when running alongside colonies server)
-    # Otherwise create a local bridge network
-    driver: bridge

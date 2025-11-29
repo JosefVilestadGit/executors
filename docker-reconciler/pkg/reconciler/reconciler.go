@@ -128,6 +128,12 @@ func CreateReconciler(client *client.ColoniesClient, executorPrvKey, colonyOwner
 		return nil, err
 	}
 
+	// Get docker network from environment, default to "colonies_default"
+	dockerNetwork := os.Getenv("DOCKER_NETWORK")
+	if dockerNetwork == "" {
+		dockerNetwork = "colonies_default"
+	}
+
 	return &Reconciler{
 		dockerHandler:  dockerHandler,
 		dockerClient:   dockerCli,
@@ -136,6 +142,7 @@ func CreateReconciler(client *client.ColoniesClient, executorPrvKey, colonyOwner
 		colonyOwnerKey: colonyOwnerKey,
 		colonyName:     colonyName,
 		location:       location,
+		dockerNetwork:  dockerNetwork,
 	}, nil
 }
 

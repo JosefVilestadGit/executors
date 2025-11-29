@@ -114,5 +114,6 @@ type Reconciler struct {
 	colonyOwnerKey string
 	colonyName     string
 	location       string
+	dockerNetwork  string     // Docker network name for deployed containers
 	logMu          sync.Mutex // Mutex for synchronizing log writes
 }

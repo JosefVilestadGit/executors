@@ -461,7 +461,7 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 	// by blueprint name (e.g., c1-database) instead of random container name (c1-database-e9328)
 	networkConfig := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{
-			"colonies_default": {
+			r.dockerNetwork: {
 				Aliases: []string{blueprint.Metadata.Name},
 			},
 		},

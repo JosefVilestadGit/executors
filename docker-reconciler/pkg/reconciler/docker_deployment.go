@@ -300,7 +300,7 @@ func (r *Reconciler) startDockerDeploymentInstanceWithName(process *core.Process
 	// Network configuration - use blueprint name as network alias
 	networkConfig := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{
-			"colonies_default": {
+			r.dockerNetwork: {
 				Aliases: []string{blueprint.Metadata.Name, containerName},
 			},
 		},
