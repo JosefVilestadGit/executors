@@ -36,9 +36,9 @@ services:
       - colonies_default
 
   # Init container to add blueprint after reconciler is ready
-  edge-init:
+  blueprint-init:
     image: colonyos/colonies:latest
-    container_name: edge-init
+    container_name: blueprint-init
     depends_on:
       - docker-reconciler-edge
     volumes:
@@ -51,13 +51,19 @@ services:
       COLONIES_COLONY_PRVKEY: ${COLONIES_COLONY_PRVKEY}
       COLONIES_PRVKEY: ${COLONIES_PRVKEY}
       RECONCILER_NAME: ${COLONIES_EXECUTOR_NAME}
+      BLUEPRINT_NAME: ${BLUEPRINT_NAME:-}
+      BLUEPRINT_FILE: ${BLUEPRINT_FILE:-}
     networks:
       - colonies_default
     entrypoint: /bin/sh
     command: >
       -c "
+      if [ -z \"$${BLUEPRINT_NAME}\" ] || [ -z \"$${BLUEPRINT_FILE}\" ]; then
+        echo 'BLUEPRINT_NAME or BLUEPRINT_FILE not set, skipping blueprint init';
+        exit 0;
+      fi;
       echo \"Waiting for $${RECONCILER_NAME} to register...\";
-      for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+      for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
         if colonies executor ls 2>/dev/null | grep -q \"$${RECONCILER_NAME}\"; then
           echo \"$${RECONCILER_NAME} is registered\";
           break;
@@ -65,7 +71,14 @@ services:
         echo \"Attempt $$i: waiting for $${RECONCILER_NAME}...\";
         sleep 2;
       done;
-      echo 'Init complete - reconciler will handle blueprints assigned to it';
+      echo \"Checking if $${BLUEPRINT_NAME} blueprint exists...\";
+      if colonies blueprint get --name \"$${BLUEPRINT_NAME}\" >/dev/null 2>&1; then
+        echo 'Blueprint already exists, skipping add';
+      else
+        echo \"Adding blueprint from $${BLUEPRINT_FILE}...\";
+        colonies blueprint add --spec \"/blueprints/$${BLUEPRINT_FILE}\";
+      fi;
+      echo 'Blueprint init complete';
       "
 
 networks:
