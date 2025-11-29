@@ -1,6 +1,7 @@
 package reconciler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"github.com/colonyos/colonies/pkg/client"
 	"github.com/colonyos/colonies/pkg/core"
 	"github.com/colonyos/executors/common/pkg/docker"
+	"github.com/docker/docker/api/types"
 	dockerclient "github.com/docker/docker/client"
 	log "github.com/sirupsen/logrus"
 )
@@ -134,6 +136,11 @@ func CreateReconciler(client *client.ColoniesClient, executorPrvKey, colonyOwner
 		dockerNetwork = "colonies_default"
 	}
 
+	// Ensure the docker network exists
+	if err := ensureNetworkExists(dockerCli, dockerNetwork); err != nil {
+		return nil, fmt.Errorf("failed to ensure docker network exists: %w", err)
+	}
+
 	return &Reconciler{
 		dockerHandler:  dockerHandler,
 		dockerClient:   dockerCli,
@@ -144,6 +151,38 @@ func CreateReconciler(client *client.ColoniesClient, executorPrvKey, colonyOwner
 		location:       location,
 		dockerNetwork:  dockerNetwork,
 	}, nil
+}
+
+// ensureNetworkExists creates the docker network if it doesn't exist
+func ensureNetworkExists(dockerCli *dockerclient.Client, networkName string) error {
+	ctx := context.Background()
+
+	log.WithField("Network", networkName).Info("Checking if docker network exists")
+
+	// Check if network exists
+	networks, err := dockerCli.NetworkList(ctx, types.NetworkListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to list networks: %w", err)
+	}
+
+	for _, n := range networks {
+		if n.Name == networkName {
+			log.WithField("Network", networkName).Info("Docker network already exists")
+			return nil
+		}
+	}
+
+	// Create the network
+	log.WithField("Network", networkName).Info("Creating docker network")
+	_, err = dockerCli.NetworkCreate(ctx, networkName, types.NetworkCreate{
+		Driver: "bridge",
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create network: %w", err)
+	}
+
+	log.WithField("Network", networkName).Info("Created docker network")
+	return nil
 }
 
 // Reconcile processes a blueprint and ensures the desired state

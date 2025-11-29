@@ -34,7 +34,7 @@ services:
       AWS_S3_SKIPVERIFY: ${AWS_S3_SKIPVERIFY}
 
       # Docker network for deployed containers (default: colonies_default)
-      DOCKER_NETWORK: ${DOCKER_NETWORK:-edge_default}
+      DOCKER_NETWORK: ${DOCKER_NETWORK:-reconciler_default}
     network_mode: host
 
   # Init container to add blueprint after reconciler is ready
