@@ -357,7 +357,7 @@ func PopulateExecutorCapabilities(executor *core.Executor) {
 
 	// Set hardware capabilities
 	executor.Capabilities = core.Capabilities{
-		Hardware: core.Hardware{
+		Hardware: []core.Hardware{{
 			Model:        DetectModel(),
 			Nodes:        1,
 			CPU:          DetectCPUModel(),
@@ -372,10 +372,10 @@ func PopulateExecutorCapabilities(executor *core.Executor) {
 				Count:     len(gpus),
 				NodeCount: len(gpus), // For single-node deployment, GPUs per node = total GPUs
 			},
-		},
-		Software: core.Software{
+		}},
+		Software: []core.Software{{
 			Name: "docker-reconciler",
 			Type: "reconciler",
-		},
+		}},
 	}
 }

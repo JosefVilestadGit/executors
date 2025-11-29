@@ -13,18 +13,20 @@ func TestPopulateExecutorCapabilities(t *testing.T) {
 	PopulateExecutorCapabilities(executor)
 
 	assert.NotEmpty(t, executor.Location.Description, "Location should be set")
-	assert.NotEmpty(t, executor.Capabilities.Hardware.Platform, "Platform should be detected")
-	assert.NotEmpty(t, executor.Capabilities.Hardware.Architecture, "Architecture should be detected")
-	assert.NotEmpty(t, executor.Capabilities.Hardware.CPU, "CPU should be detected")
+	assert.Len(t, executor.Capabilities.Hardware, 1, "Should have one hardware entry")
+	assert.NotEmpty(t, executor.Capabilities.Hardware[0].Platform, "Platform should be detected")
+	assert.NotEmpty(t, executor.Capabilities.Hardware[0].Architecture, "Architecture should be detected")
+	assert.NotEmpty(t, executor.Capabilities.Hardware[0].CPU, "CPU should be detected")
 
 	// Memory detection only works on Linux
 	if runtime.GOOS == "linux" {
-		assert.NotEmpty(t, executor.Capabilities.Hardware.Memory, "Memory should be detected on Linux")
+		assert.NotEmpty(t, executor.Capabilities.Hardware[0].Memory, "Memory should be detected on Linux")
 	}
 
 	// Software info should be set
-	assert.Equal(t, "docker-reconciler", executor.Capabilities.Software.Name)
-	assert.Equal(t, "reconciler", executor.Capabilities.Software.Type)
+	assert.Len(t, executor.Capabilities.Software, 1, "Should have one software entry")
+	assert.Equal(t, "docker-reconciler", executor.Capabilities.Software[0].Name)
+	assert.Equal(t, "reconciler", executor.Capabilities.Software[0].Type)
 }
 
 func TestDetectMemoryMB(t *testing.T) {
@@ -95,7 +97,8 @@ func TestPopulateExecutorCapabilities_CPUCores(t *testing.T) {
 	PopulateExecutorCapabilities(executor)
 
 	// Verify CPU is set (either to model name or core count)
-	assert.NotEmpty(t, executor.Capabilities.Hardware.CPU, "CPU should be set")
+	assert.Len(t, executor.Capabilities.Hardware, 1, "Should have one hardware entry")
+	assert.NotEmpty(t, executor.Capabilities.Hardware[0].CPU, "CPU should be set")
 }
 
 func TestPopulateExecutorCapabilities_PlatformInfo(t *testing.T) {
@@ -103,8 +106,9 @@ func TestPopulateExecutorCapabilities_PlatformInfo(t *testing.T) {
 	PopulateExecutorCapabilities(executor)
 
 	// Verify platform and architecture match runtime
-	assert.Equal(t, runtime.GOOS, executor.Capabilities.Hardware.Platform, "Platform should match runtime.GOOS")
-	assert.Equal(t, runtime.GOARCH, executor.Capabilities.Hardware.Architecture, "Architecture should match runtime.GOARCH")
+	assert.Len(t, executor.Capabilities.Hardware, 1, "Should have one hardware entry")
+	assert.Equal(t, runtime.GOOS, executor.Capabilities.Hardware[0].Platform, "Platform should match runtime.GOOS")
+	assert.Equal(t, runtime.GOARCH, executor.Capabilities.Hardware[0].Architecture, "Architecture should match runtime.GOARCH")
 }
 
 func TestPopulateExecutorCapabilities_GPU(t *testing.T) {
@@ -112,5 +116,6 @@ func TestPopulateExecutorCapabilities_GPU(t *testing.T) {
 	PopulateExecutorCapabilities(executor)
 
 	// GPU count should be non-negative
-	assert.GreaterOrEqual(t, executor.Capabilities.Hardware.GPU.Count, 0, "GPU count should be non-negative")
+	assert.Len(t, executor.Capabilities.Hardware, 1, "Should have one hardware entry")
+	assert.GreaterOrEqual(t, executor.Capabilities.Hardware[0].GPU.Count, 0, "GPU count should be non-negative")
 }
