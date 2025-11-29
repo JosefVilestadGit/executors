@@ -41,6 +41,7 @@ services:
     container_name: blueprint-init
     depends_on:
       - docker-reconciler-edge
+    network_mode: host
     volumes:
       - ./blueprints:/blueprints:ro
     environment:
@@ -53,8 +54,6 @@ services:
       RECONCILER_NAME: ${COLONIES_EXECUTOR_NAME}
       BLUEPRINT_NAME: ${BLUEPRINT_NAME:-}
       BLUEPRINT_FILE: ${BLUEPRINT_FILE:-}
-    networks:
-      - colonies_default
     entrypoint: /bin/sh
     command: >
       -c "
@@ -62,13 +61,15 @@ services:
         echo 'BLUEPRINT_NAME or BLUEPRINT_FILE not set, skipping blueprint init';
         exit 0;
       fi;
+      echo \"Connecting to $${COLONIES_SERVER_HOST}:$${COLONIES_SERVER_PORT}\";
       echo \"Waiting for $${RECONCILER_NAME} to register...\";
       for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-        if colonies executor ls 2>/dev/null | grep -q \"$${RECONCILER_NAME}\"; then
+        result=$$(colonies executor ls 2>&1) || true;
+        if echo \"$$result\" | grep -q \"$${RECONCILER_NAME}\"; then
           echo \"$${RECONCILER_NAME} is registered\";
           break;
         fi;
-        echo \"Attempt $$i: waiting for $${RECONCILER_NAME}...\";
+        echo \"Attempt $$i: waiting for $${RECONCILER_NAME}... ($$result)\";
         sleep 2;
       done;
       echo \"Checking if $${BLUEPRINT_NAME} blueprint exists...\";
