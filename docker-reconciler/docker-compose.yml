@@ -70,6 +70,6 @@ services:
 
 networks:
   colonies_default:
-    external: true
-    # This is the default network created by the colonies docker-compose
-    # It must already exist (created when you run colonies docker-compose up)
+    # Use external network if it exists (when running alongside colonies server)
+    # Otherwise create a local bridge network
+    driver: bridge
