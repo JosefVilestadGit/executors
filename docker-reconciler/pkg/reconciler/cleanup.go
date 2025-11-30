@@ -242,9 +242,32 @@ func (r *Reconciler) CleanupStaleExecutors(deploymentName string, executorType s
 			continue
 		}
 
-		// Check if executor name matches pattern (starts with deployment name)
-		if deploymentName != "" && !strings.HasPrefix(executor.Name, deploymentName+"-") {
-			continue
+		// Check if executor name matches pattern (must be exactly <deploymentName>-<hash>-<generation>)
+		// Use a more precise check to avoid matching deployments that share a prefix
+		// e.g., "ollama" should not match "ollama-ultra-xxx-1"
+		if deploymentName != "" {
+			// Split the executor name to extract the deployment part
+			// Format: <deployment>-<hash>-<generation>
+			parts := strings.Split(executor.Name, "-")
+			if len(parts) < 3 {
+				continue // Not a valid executor name format
+			}
+			// The deployment name might contain hyphens, so we need to check if the
+			// executor name starts with the deployment name followed by exactly 2 more parts
+			// For simple deployment names without hyphens (like "ollama"), this is straightforward
+			// For deployment names with hyphens (like "ollama-ultra"), we need to reconstruct
+			deploymentParts := strings.Split(deploymentName, "-")
+
+			// Check if the executor name has the deployment prefix followed by hash and generation
+			if len(parts) != len(deploymentParts)+2 {
+				continue // Wrong number of parts for this deployment
+			}
+
+			// Verify the deployment name matches exactly
+			execDeployment := strings.Join(parts[:len(deploymentParts)], "-")
+			if execDeployment != deploymentName {
+				continue
+			}
 		}
 
 		// Executor name format: <deployment>-<hash>-<generation>

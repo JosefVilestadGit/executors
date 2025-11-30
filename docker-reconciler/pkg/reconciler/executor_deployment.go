@@ -357,9 +357,38 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 		}
 
 		// Auto-approve the executor (reconciler has colony owner privileges)
+		log.WithFields(log.Fields{
+			"ExecutorName":   executorName,
+			"ColonyName":     r.colonyName,
+			"ColonyOwnerKey": r.colonyOwnerKey[:8] + "...",
+		}).Debug("Approving executor with colony owner key")
+
 		err = r.client.ApproveExecutor(r.colonyName, executorName, r.colonyOwnerKey)
 		if err != nil {
 			return fmt.Errorf("failed to approve executor %s: %w", containerName, err)
+		}
+
+		log.WithFields(log.Fields{
+			"BlueprintName": blueprint.Metadata.Name,
+			"ExecutorName":  executorName,
+			"ColonyName":    r.colonyName,
+		}).Info("Executor approved successfully")
+
+		// Verify the executor state after approval (use executor's own key to query)
+		fetchedExecutor, fetchErr := r.client.GetExecutor(r.colonyName, executorName, executorPrvKey)
+		if fetchErr != nil {
+			log.WithFields(log.Fields{
+				"Error":        fetchErr,
+				"ExecutorName": executorName,
+			}).Error("Failed to fetch executor after approval")
+		} else {
+			log.WithFields(log.Fields{
+				"ExecutorName":  executorName,
+				"AddedID":       addedExecutor.ID,
+				"FetchedID":     fetchedExecutor.ID,
+				"FetchedState":  fetchedExecutor.State,
+				"IDMatch":       addedExecutor.ID == fetchedExecutor.ID,
+			}).Info("Executor state after approval")
 		}
 
 		log.WithFields(log.Fields{
