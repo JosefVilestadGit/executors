@@ -26,11 +26,19 @@ func (e *Executor) handleReconcile(process *core.Process) {
 }
 
 // handleConsolidatedReconcile fetches all blueprints of a Kind and reconciles them in parallel
+// If blueprintName is provided, only that specific blueprint is reconciled
 func (e *Executor) handleConsolidatedReconcile(process *core.Process, kind string) {
+	// Check for specific blueprint name (single blueprint reconciliation)
+	blueprintName := ""
+	if name, ok := process.FunctionSpec.KwArgs["blueprintName"].(string); ok {
+		blueprintName = name
+	}
+
 	log.WithFields(log.Fields{
-		"ProcessID": process.ID,
-		"Kind":      kind,
-	}).Info("Consolidated reconciliation for Kind")
+		"ProcessID":     process.ID,
+		"Kind":          kind,
+		"BlueprintName": blueprintName,
+	}).Info("Reconciliation request")
 
 	// Check for force flag in kwargs
 	force := false
@@ -39,7 +47,11 @@ func (e *Executor) handleConsolidatedReconcile(process *core.Process, kind strin
 	}
 
 	// Add log to process for visibility via `colonies log get`
-	e.addProcessLog(process, "Starting reconciliation for Kind: "+kind)
+	if blueprintName != "" {
+		e.addProcessLog(process, "Starting reconciliation for blueprint: "+blueprintName)
+	} else {
+		e.addProcessLog(process, "Starting reconciliation for Kind: "+kind)
+	}
 	if force {
 		e.addProcessLog(process, "Force flag enabled - will recreate all containers")
 	}
@@ -54,8 +66,13 @@ func (e *Executor) handleConsolidatedReconcile(process *core.Process, kind strin
 	}
 
 	// Filter blueprints that are assigned to this executor
+	// If blueprintName is specified, also filter to only that blueprint
 	var blueprints []*core.Blueprint
 	for _, blueprint := range allBlueprints {
+		// If a specific blueprint name is requested, skip others
+		if blueprintName != "" && blueprint.Metadata.Name != blueprintName {
+			continue
+		}
 		if e.shouldHandleBlueprint(blueprint) {
 			blueprints = append(blueprints, blueprint)
 		} else {
