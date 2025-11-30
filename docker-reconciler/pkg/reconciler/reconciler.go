@@ -51,6 +51,17 @@ func (r *Reconciler) getDefaultEnvVars(executorType string) map[string]string {
 	if port := os.Getenv("COLONIES_SERVER_PORT"); port != "" {
 		defaults["COLONIES_SERVER_PORT"] = port
 	}
+	// Also inject the new HTTP client configuration for newer executors
+	if host := os.Getenv("COLONIES_CLIENT_HTTP_HOST"); host != "" {
+		defaults["COLONIES_CLIENT_HTTP_HOST"] = host
+	} else if host := os.Getenv("COLONIES_SERVER_HOST"); host != "" {
+		defaults["COLONIES_CLIENT_HTTP_HOST"] = host
+	}
+	if port := os.Getenv("COLONIES_CLIENT_HTTP_PORT"); port != "" {
+		defaults["COLONIES_CLIENT_HTTP_PORT"] = port
+	} else if port := os.Getenv("COLONIES_SERVER_PORT"); port != "" {
+		defaults["COLONIES_CLIENT_HTTP_PORT"] = port
+	}
 	if tls := os.Getenv("COLONIES_TLS"); tls != "" {
 		defaults["COLONIES_TLS"] = tls
 	}
@@ -95,22 +106,13 @@ func (r *Reconciler) getDefaultEnvVars(executorType string) map[string]string {
 	defaults["EXECUTOR_ADD_DEBUG_LOGS"] = "false"
 	defaults["EXECUTOR_FS_DIR"] = "/tmp/colonies"
 
-	// Hardware defaults
-	defaults["EXECUTOR_GPU"] = "0"
-	defaults["EXECUTOR_HW_MODEL"] = "n/a"
+	// Hardware defaults required by docker-executor (strconv.Atoi requires non-empty values)
+	// These can be overridden by blueprint env vars for deployments with specific hardware
 	defaults["EXECUTOR_HW_NODES"] = "1"
-	defaults["EXECUTOR_HW_CPU"] = ""
-	defaults["EXECUTOR_HW_MEM"] = ""
-	defaults["EXECUTOR_HW_STORAGE"] = ""
 	defaults["EXECUTOR_HW_GPU_COUNT"] = "0"
-	defaults["EXECUTOR_HW_GPU_MEM"] = ""
 	defaults["EXECUTOR_HW_GPU_NODES_COUNT"] = "0"
-	defaults["EXECUTOR_HW_GPU_NAME"] = ""
-
-	// Location defaults
-	defaults["EXECUTOR_LOCATION_LONG"] = ""
-	defaults["EXECUTOR_LOCATION_LAT"] = ""
-	defaults["EXECUTOR_LOCATION_DESC"] = "n/a"
+	defaults["EXECUTOR_LOCATION_LONG"] = "0"
+	defaults["EXECUTOR_LOCATION_LAT"] = "0"
 
 	// Software version defaults (will be overridden with actual image)
 	defaults["EXECUTOR_SW_TYPE"] = "docker"

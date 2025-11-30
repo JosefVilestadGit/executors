@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/colonyos/colonies/pkg/core"
 	"github.com/colonyos/colonies/pkg/security/crypto"
-	"github.com/colonyos/executors/docker-reconciler/pkg/hwdetect"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
@@ -340,11 +340,16 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 		executorName := fmt.Sprintf("%s-%d", containerName, blueprint.Metadata.Generation)
 		newExecutor := core.CreateExecutor(executorID, executorType, executorName, r.colonyName, time.Now(), time.Now())
 
-		// Populate hardware capabilities (inherits from reconciler's host)
-		hwdetect.PopulateExecutorCapabilities(newExecutor)
+		// Populate hardware capabilities from blueprint env vars, falling back to auto-detection
+		populateCapabilitiesFromEnv(newExecutor, envMap)
 
-		// Override location with reconciler's location setting
-		newExecutor.Location = core.Location{Description: r.location}
+		// Override location with reconciler's location setting (if not specified in env)
+		locName := envMap["EXECUTOR_LOCATION_NAME"]
+		locDesc := envMap["EXECUTOR_LOCATION_DESC"]
+		if locDesc == "" {
+			locDesc = r.location
+		}
+		newExecutor.Location = core.Location{Name: locName, Description: locDesc}
 
 		addedExecutor, err := r.client.AddExecutor(newExecutor, r.colonyOwnerKey)
 		if err != nil {
@@ -490,4 +495,46 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 	}).Info("Container started and running")
 
 	return nil
+}
+
+// populateCapabilitiesFromEnv populates executor capabilities from environment variables only
+func populateCapabilitiesFromEnv(executor *core.Executor, envMap map[string]string) {
+	// Initialize hardware array with one entry
+	executor.Capabilities.Hardware = []core.Hardware{{}}
+	hw := &executor.Capabilities.Hardware[0]
+
+	// Populate from env vars
+	hw.Model = envMap["EXECUTOR_HW_MODEL"]
+	hw.CPU = envMap["EXECUTOR_HW_CPU"]
+	if coresStr := envMap["EXECUTOR_HW_CPU_CORES"]; coresStr != "" {
+		if cores, err := strconv.Atoi(coresStr); err == nil {
+			hw.Cores = cores
+		}
+	}
+	hw.Memory = envMap["EXECUTOR_HW_MEM"]
+	hw.Storage = envMap["EXECUTOR_HW_STORAGE"]
+	hw.Platform = envMap["EXECUTOR_HW_PLATFORM"]
+	hw.Architecture = envMap["EXECUTOR_HW_ARCHITECTURE"]
+	if network := envMap["EXECUTOR_HW_NETWORK"]; network != "" {
+		hw.Network = strings.Split(network, ",")
+	}
+	if nodesStr := envMap["EXECUTOR_HW_NODES"]; nodesStr != "" {
+		if nodes, err := strconv.Atoi(nodesStr); err == nil {
+			hw.Nodes = nodes
+		}
+	}
+
+	// GPU settings
+	hw.GPU.Name = envMap["EXECUTOR_HW_GPU_NAME"]
+	hw.GPU.Memory = envMap["EXECUTOR_HW_GPU_MEM"]
+	if gpuCountStr := envMap["EXECUTOR_HW_GPU_COUNT"]; gpuCountStr != "" {
+		if gpuCount, err := strconv.Atoi(gpuCountStr); err == nil {
+			hw.GPU.Count = gpuCount
+		}
+	}
+	if gpuNodeCountStr := envMap["EXECUTOR_HW_GPU_NODES_COUNT"]; gpuNodeCountStr != "" {
+		if gpuNodeCount, err := strconv.Atoi(gpuNodeCountStr); err == nil {
+			hw.GPU.NodeCount = gpuNodeCount
+		}
+	}
 }

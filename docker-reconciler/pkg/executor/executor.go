@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -36,6 +38,62 @@ type Executor struct {
 	logMu              sync.Mutex // Mutex for synchronizing log writes
 }
 
+// populateCapabilitiesFromEnv populates executor capabilities from environment variables
+func populateCapabilitiesFromEnv(executor *core.Executor) {
+	// Initialize hardware array with one entry
+	executor.Capabilities.Hardware = []core.Hardware{{}}
+	hw := &executor.Capabilities.Hardware[0]
+
+	// Populate from env vars
+	hw.Model = os.Getenv("EXECUTOR_HW_MODEL")
+	hw.CPU = os.Getenv("EXECUTOR_HW_CPU")
+	if coresStr := os.Getenv("EXECUTOR_HW_CPU_CORES"); coresStr != "" {
+		if cores, err := strconv.Atoi(coresStr); err == nil {
+			hw.Cores = cores
+		}
+	}
+	hw.Memory = os.Getenv("EXECUTOR_HW_MEM")
+	hw.Storage = os.Getenv("EXECUTOR_HW_STORAGE")
+	hw.Platform = os.Getenv("EXECUTOR_HW_PLATFORM")
+	hw.Architecture = os.Getenv("EXECUTOR_HW_ARCHITECTURE")
+	if network := os.Getenv("EXECUTOR_HW_NETWORK"); network != "" {
+		hw.Network = strings.Split(network, ",")
+	}
+	if nodesStr := os.Getenv("EXECUTOR_HW_NODES"); nodesStr != "" {
+		if nodes, err := strconv.Atoi(nodesStr); err == nil {
+			hw.Nodes = nodes
+		}
+	}
+
+	// GPU settings
+	hw.GPU.Name = os.Getenv("EXECUTOR_HW_GPU_NAME")
+	hw.GPU.Memory = os.Getenv("EXECUTOR_HW_GPU_MEM")
+	if gpuCountStr := os.Getenv("EXECUTOR_HW_GPU_COUNT"); gpuCountStr != "" {
+		if gpuCount, err := strconv.Atoi(gpuCountStr); err == nil {
+			hw.GPU.Count = gpuCount
+		}
+	}
+	if gpuNodeCountStr := os.Getenv("EXECUTOR_HW_GPU_NODES_COUNT"); gpuNodeCountStr != "" {
+		if gpuNodeCount, err := strconv.Atoi(gpuNodeCountStr); err == nil {
+			hw.GPU.NodeCount = gpuNodeCount
+		}
+	}
+
+	// Location settings
+	executor.Location.Name = os.Getenv("EXECUTOR_LOCATION_NAME")
+	executor.Location.Description = os.Getenv("EXECUTOR_LOCATION_DESC")
+	if longStr := os.Getenv("EXECUTOR_LOCATION_LONG"); longStr != "" {
+		if long, err := strconv.ParseFloat(longStr, 64); err == nil {
+			executor.Location.Long = long
+		}
+	}
+	if latStr := os.Getenv("EXECUTOR_LOCATION_LAT"); latStr != "" {
+		if lat, err := strconv.ParseFloat(latStr, 64); err == nil {
+			executor.Location.Lat = lat
+		}
+	}
+}
+
 // createColoniesExecutorWithKey creates a new executor with generated keys
 func (e *Executor) createColoniesExecutorWithKey(colonyName string) (*core.Executor, string, string, error) {
 	crypto := crypto.CreateCrypto()
@@ -51,8 +109,8 @@ func (e *Executor) createColoniesExecutorWithKey(colonyName string) (*core.Execu
 
 	executor := core.CreateExecutor(executorID, e.executorType, e.executorName, colonyName, time.Now(), time.Now())
 
-	// Populate executor capabilities with auto-detected hardware info
-	PopulateExecutorCapabilities(executor)
+	// Populate capabilities from environment variables
+	populateCapabilitiesFromEnv(executor)
 
 	return executor, executorID, executorPrvKey, nil
 }
