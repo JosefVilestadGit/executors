@@ -121,7 +121,7 @@ func (r *Reconciler) getDefaultEnvVars(executorType string) map[string]string {
 }
 
 // CreateReconciler creates a new Reconciler instance
-func CreateReconciler(client *client.ColoniesClient, executorPrvKey, colonyOwnerKey, colonyName, location string) (*Reconciler, error) {
+func CreateReconciler(client *client.ColoniesClient, executorPrvKey, colonyOwnerKey, colonyName, executorName, location string) (*Reconciler, error) {
 	dockerHandler, err := docker.CreateDockerHandler()
 	if err != nil {
 		return nil, err
@@ -150,6 +150,7 @@ func CreateReconciler(client *client.ColoniesClient, executorPrvKey, colonyOwner
 		executorPrvKey: executorPrvKey,
 		colonyOwnerKey: colonyOwnerKey,
 		colonyName:     colonyName,
+		executorName:   executorName,
 		location:       location,
 		dockerNetwork:  dockerNetwork,
 	}, nil

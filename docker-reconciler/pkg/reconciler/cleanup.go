@@ -11,6 +11,30 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// shouldHandleBlueprint returns true if this reconciler should handle the given blueprint
+func (r *Reconciler) shouldHandleBlueprint(blueprint *core.Blueprint) bool {
+	if blueprint.Handler == nil {
+		return false
+	}
+
+	// Check single executor name
+	if blueprint.Handler.ExecutorName != "" {
+		return blueprint.Handler.ExecutorName == r.executorName
+	}
+
+	// Check list of executor names
+	if len(blueprint.Handler.ExecutorNames) > 0 {
+		for _, name := range blueprint.Handler.ExecutorNames {
+			if name == r.executorName {
+				return true
+			}
+		}
+		return false
+	}
+
+	return false
+}
+
 // HasOldGenerationContainers checks if any containers have old generation labels
 func (r *Reconciler) HasOldGenerationContainers(blueprint *core.Blueprint) (bool, error) {
 	ctx := context.Background()
@@ -200,7 +224,31 @@ func (r *Reconciler) CleanupStoppedContainers() error {
 }
 
 // CleanupStaleExecutors removes executor registrations for containers that no longer exist
+// It only cleans up executors for blueprints this reconciler is responsible for handling
 func (r *Reconciler) CleanupStaleExecutors(deploymentName string, executorType string) error {
+	// First, verify this reconciler should handle this deployment by checking the blueprint
+	if deploymentName != "" {
+		blueprint, err := r.client.GetBlueprint(r.colonyName, deploymentName, r.executorPrvKey)
+		if err != nil {
+			// If blueprint doesn't exist, skip cleanup - another reconciler may have deleted it
+			log.WithFields(log.Fields{
+				"DeploymentName": deploymentName,
+				"Error":          err,
+			}).Debug("Blueprint not found, skipping stale executor cleanup")
+			return nil
+		}
+
+		// Check if this reconciler should handle this blueprint
+		if !r.shouldHandleBlueprint(blueprint) {
+			log.WithFields(log.Fields{
+				"DeploymentName": deploymentName,
+				"ReconcilerName": r.executorName,
+				"HandlerName":    blueprint.Handler.ExecutorName,
+			}).Debug("Skipping stale executor cleanup - blueprint not handled by this reconciler")
+			return nil
+		}
+	}
+
 	// Get all executors of the given type (use executor key, not colony owner key)
 	executors, err := r.client.GetExecutors(r.colonyName, r.executorPrvKey)
 	if err != nil {

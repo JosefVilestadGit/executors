@@ -113,6 +113,7 @@ type Reconciler struct {
 	executorPrvKey string
 	colonyOwnerKey string
 	colonyName     string
+	executorName   string // Name of the reconciler executor for handler ownership checks
 	location       string
 	dockerNetwork  string     // Docker network name for deployed containers
 	logMu          sync.Mutex // Mutex for synchronizing log writes

@@ -171,7 +171,7 @@ func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
 	}
 
 	// Create reconciler with colony owner key for executor registration
-	e.reconciler, err = reconciler.CreateReconciler(e.client, e.executorPrvKey, e.colonyPrvKey, e.colonyName, location)
+	e.reconciler, err = reconciler.CreateReconciler(e.client, e.executorPrvKey, e.colonyPrvKey, e.colonyName, e.executorName, location)
 	if err != nil {
 		return nil, err
 	}
