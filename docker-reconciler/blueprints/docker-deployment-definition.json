@@ -139,7 +139,7 @@
       }
     },
     "handler": {
-      "executorType": "docker-reconciler",
+      "executorType": "docker-reconciler-apple-ultra",
       "functionName": "reconcile"
     }
   }
