@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -391,6 +392,9 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 
 		// Override location with reconciler's location setting (if not specified in env)
 		locName := envMap["EXECUTOR_LOCATION_NAME"]
+		if locName == "" {
+			locName = os.Getenv("EXECUTOR_LOCATION_NAME")
+		}
 		locDesc := envMap["EXECUTOR_LOCATION_DESC"]
 		if locDesc == "" {
 			locDesc = r.location
