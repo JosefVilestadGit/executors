@@ -11,6 +11,75 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// HasOrphanedContainers checks if any running containers don't have corresponding executor registrations
+// This is a lightweight check used by checkReconciliationNeeded to determine if reconciliation is needed
+func (r *Reconciler) HasOrphanedContainers(blueprint *core.Blueprint, executorType string) (bool, error) {
+	ctx := context.Background()
+
+	// List running containers for this deployment
+	filterArgs := filters.NewArgs()
+	filterArgs.Add("label", "colonies.deployment="+blueprint.Metadata.Name)
+
+	containers, err := r.dockerClient.ContainerList(ctx, container.ListOptions{
+		All:     false, // Only running containers
+		Filters: filterArgs,
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	if len(containers) == 0 {
+		return false, nil
+	}
+
+	// Get all executors of the given type
+	executors, err := r.client.GetExecutors(r.colonyName, r.executorPrvKey)
+	if err != nil {
+		return false, fmt.Errorf("failed to list executors: %w", err)
+	}
+
+	// Build a set of registered executor names
+	registeredExecutors := make(map[string]bool)
+	for _, executor := range executors {
+		if executorType == "" || executor.Type == executorType {
+			registeredExecutors[executor.Name] = true
+		}
+	}
+
+	// Check each container
+	for _, cont := range containers {
+		// Get container name (remove leading slash if present)
+		containerName := ""
+		if len(cont.Names) > 0 {
+			containerName = cont.Names[0]
+			if len(containerName) > 0 && containerName[0] == '/' {
+				containerName = containerName[1:]
+			}
+		}
+
+		// Get generation from container label
+		generationStr := cont.Labels["colonies.generation"]
+		if generationStr == "" {
+			continue // Can't determine executor name without generation
+		}
+
+		// Construct expected executor name
+		executorName := fmt.Sprintf("%s-%s", containerName, generationStr)
+
+		// Check if executor is registered
+		if !registeredExecutors[executorName] {
+			log.WithFields(log.Fields{
+				"ContainerName":    containerName,
+				"ExpectedExecutor": executorName,
+				"Blueprint":        blueprint.Metadata.Name,
+			}).Debug("Found orphaned container during check")
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 // FindOrphanedContainers finds running containers that don't have a corresponding executor registration
 // This detects containers where the executor registration was lost but the container is still running
 func (r *Reconciler) FindOrphanedContainers(process *core.Process, blueprint *core.Blueprint, executorType string) ([]string, error) {

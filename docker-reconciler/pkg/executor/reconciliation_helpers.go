@@ -48,7 +48,32 @@ func (e *Executor) checkReconciliationNeeded(blueprint *core.Blueprint) (bool, s
 		return true, "containers with old generation labels detected"
 	}
 
+	// Check for orphaned containers (containers without executor registrations)
+	// This is critical for ExecutorDeployments where executors may be removed
+	// but containers are still running
+	if blueprint.Kind == "ExecutorDeployment" {
+		executorType := e.getExecutorType(blueprint)
+		hasOrphans, err := e.reconciler.HasOrphanedContainers(blueprint, executorType)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"Error":         err,
+				"BlueprintName": blueprint.Metadata.Name,
+			}).Warn("Failed to check for orphaned containers")
+			// Don't return false here - continue with other checks
+		} else if hasOrphans {
+			return true, "orphaned containers detected (containers without executor registrations)"
+		}
+	}
+
 	return false, ""
+}
+
+// getExecutorType extracts the executor type from a blueprint spec
+func (e *Executor) getExecutorType(blueprint *core.Blueprint) string {
+	if executorType, ok := blueprint.Spec["executorType"].(string); ok {
+		return executorType
+	}
+	return ""
 }
 
 // getDesiredReplicas extracts the desired replica count from a blueprint
