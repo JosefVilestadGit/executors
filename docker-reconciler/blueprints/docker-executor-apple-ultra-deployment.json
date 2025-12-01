@@ -1,10 +1,11 @@
 {
   "kind": "ExecutorDeployment",
   "metadata": {
-    "name": "apple-ultra-docker-executor"
+    "name": "docker-executor-apple-ultra"
   },
   "handler": {
-    "executorName": "apple-ultra-docker-reconciler"
+    "executorType": "docker-reconciler-apple-ultra",
+    "executorName": "docker-reconciler-apple-ultra"
   },
   "spec": {
     "image": "colonyos/dockerexecutor:v1.0.7",

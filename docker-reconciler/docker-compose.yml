@@ -94,10 +94,13 @@ services:
       done;
       echo \"Checking if $${BLUEPRINT_NAME} blueprint exists...\";
       if colonies blueprint get --name \"$${BLUEPRINT_NAME}\" >/dev/null 2>&1; then
-        echo 'Blueprint already exists, skipping add';
+        echo 'Blueprint already exists, triggering reconciliation...';
+        colonies blueprint reconcile --name \"$${BLUEPRINT_NAME}\" || true;
       else
         echo \"Adding blueprint from $${BLUEPRINT_FILE}...\";
         colonies blueprint add --spec \"/blueprints/$${BLUEPRINT_FILE}\";
+        echo 'Triggering initial reconciliation...';
+        colonies blueprint reconcile --name \"$${BLUEPRINT_NAME}\" || true;
       fi;
       echo 'Blueprint init complete';
       "

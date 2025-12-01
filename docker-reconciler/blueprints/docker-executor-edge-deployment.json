@@ -1,10 +1,11 @@
 {
   "kind": "ExecutorDeployment",
   "metadata": {
-    "name": "apple-ultra-docker-executor"
+    "name": "docker-executor-edge"
   },
   "handler": {
-    "executorName": "edge-docker-reconciler"
+    "executorType": "docker-reconciler-edge",
+    "executorName": "docker-reconciler-edge"
   },
   "spec": {
     "image": "colonyos/dockerexecutor:v1.0.7",
@@ -23,22 +24,22 @@
     "privileged": true,
     "env": {
       "EXECUTOR_TYPE": "container-executor",
-      "EXECUTOR_HW_MODEL": "Mac Studio",
-      "EXECUTOR_HW_CPU": "Apple M2 Ultra",
-      "EXECUTOR_HW_CPU_CORES": "24",
-      "EXECUTOR_HW_MEM": "192 GB",
-      "EXECUTOR_HW_STORAGE": "2000 GB",
-      "EXECUTOR_HW_PLATFORM": "darwin",
+      "EXECUTOR_HW_MODEL": "Edge Device",
+      "EXECUTOR_HW_CPU": "ARM Cortex-A72",
+      "EXECUTOR_HW_CPU_CORES": "4",
+      "EXECUTOR_HW_MEM": "8 GB",
+      "EXECUTOR_HW_STORAGE": "64 GB",
+      "EXECUTOR_HW_PLATFORM": "linux",
       "EXECUTOR_HW_ARCHITECTURE": "arm64",
-      "EXECUTOR_HW_GPU_NAME": "Apple M2 Ultra GPU",
-      "EXECUTOR_HW_GPU_COUNT": "1",
-      "EXECUTOR_HW_GPU_MEM": "192 GB",
+      "EXECUTOR_HW_GPU_NAME": "",
+      "EXECUTOR_HW_GPU_COUNT": "0",
+      "EXECUTOR_HW_GPU_MEM": "0",
       "EXECUTOR_HW_NODES": "1",
-      "EXECUTOR_HW_GPU_NODES_COUNT": "1",
+      "EXECUTOR_HW_GPU_NODES_COUNT": "0",
       "EXECUTOR_LOCATION_LONG": "0",
       "EXECUTOR_LOCATION_LAT": "0",
-      "EXECUTOR_LOCATION_NAME": "Apple Ultra",
-      "EXECUTOR_LOCATION_DESC": "Mac Studio M2 Ultra"
+      "EXECUTOR_LOCATION_NAME": "Edge",
+      "EXECUTOR_LOCATION_DESC": "Edge Device"
     }
   }
 }
