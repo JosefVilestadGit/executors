@@ -315,6 +315,27 @@ func createTestBlueprint(name, executorType, reconcilerName, colonyName string) 
 }
 
 func triggerReconcile(c *client.ColoniesClient, colonyName, blueprintName, prvKey string, force bool) (*core.Process, error) {
+	return triggerReconcileWithTarget(c, colonyName, blueprintName, prvKey, force, "")
+}
+
+// triggerReconcileWithTarget triggers reconciliation targeting a specific reconciler executor
+// If reconcilerName is empty, it will fetch the blueprint's handler to determine the target
+func triggerReconcileWithTarget(c *client.ColoniesClient, colonyName, blueprintName, prvKey string, force bool, reconcilerName string) (*core.Process, error) {
+	// If no reconciler specified, get it from the blueprint's handler
+	if reconcilerName == "" {
+		blueprint, err := c.GetBlueprint(colonyName, blueprintName, prvKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get blueprint: %w", err)
+		}
+		if blueprint.Handler != nil {
+			if blueprint.Handler.ExecutorName != "" {
+				reconcilerName = blueprint.Handler.ExecutorName
+			} else if len(blueprint.Handler.ExecutorNames) > 0 {
+				reconcilerName = blueprint.Handler.ExecutorNames[0]
+			}
+		}
+	}
+
 	funcSpec := &core.FunctionSpec{
 		NodeName:    "",
 		FuncName:    "reconcile",
@@ -331,6 +352,11 @@ func triggerReconcile(c *client.ColoniesClient, colonyName, blueprintName, prvKe
 			ColonyName:   colonyName,
 			ExecutorType: "docker-reconciler",
 		},
+	}
+
+	// Target specific reconciler if specified (critical for multi-reconciler environments)
+	if reconcilerName != "" {
+		funcSpec.Conditions.ExecutorNames = []string{reconcilerName}
 	}
 
 	return c.Submit(funcSpec, prvKey)
