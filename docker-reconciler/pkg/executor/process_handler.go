@@ -2,7 +2,6 @@ package executor
 
 import (
 	"fmt"
-	"sync"
 
 	"github.com/colonyos/colonies/pkg/core"
 	log "github.com/sirupsen/logrus"
@@ -98,26 +97,10 @@ func (e *Executor) handleConsolidatedReconcile(process *core.Process, kind strin
 	}).Info("Found blueprints to reconcile")
 	e.addProcessLog(process, fmt.Sprintf("Found %d blueprint(s) to reconcile (of %d total)", len(blueprints), len(allBlueprints)))
 
-	// Reconcile all blueprints in parallel
-	var wg sync.WaitGroup
-	results := make(chan map[string]interface{}, len(blueprints))
-
-	for _, blueprint := range blueprints {
-		wg.Add(1)
-		go func(bp *core.Blueprint) {
-			defer wg.Done()
-			result := e.reconcileBlueprintParallel(process, bp, force)
-			results <- result
-		}(blueprint)
-	}
-
-	// Wait for all reconciliations to complete
-	wg.Wait()
-	close(results)
-
-	// Collect results
+	// Reconcile all blueprints sequentially (no goroutines to avoid race conditions)
 	var allResults []interface{}
-	for result := range results {
+	for _, blueprint := range blueprints {
+		result := e.reconcileBlueprintParallel(process, blueprint, force)
 		allResults = append(allResults, result)
 	}
 
