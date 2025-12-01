@@ -182,7 +182,7 @@ func TestCleanupStoppedContainers(t *testing.T) {
 		mockDocker.On("ContainerRemove", mock.Anything, "stopped-2", mock.Anything).Return(nil)
 
 		// Execute
-		err := reconciler.CleanupStoppedContainers()
+		err := reconciler.CleanupStoppedContainers(nil)
 
 		// Verify
 		assert.NoError(t, err)
@@ -197,7 +197,7 @@ func TestCleanupStoppedContainers(t *testing.T) {
 
 		mockDocker.On("ContainerList", mock.Anything, mock.Anything).Return([]types.Container{}, nil)
 
-		err := reconciler.CleanupStoppedContainers()
+		err := reconciler.CleanupStoppedContainers(nil)
 
 		assert.NoError(t, err)
 		mockDocker.AssertExpectations(t)
@@ -210,7 +210,7 @@ func TestCleanupStoppedContainers(t *testing.T) {
 
 		mockDocker.On("ContainerList", mock.Anything, mock.Anything).Return(nil, errors.New("Docker daemon not available"))
 
-		err := reconciler.CleanupStoppedContainers()
+		err := reconciler.CleanupStoppedContainers(nil)
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to list managed containers")

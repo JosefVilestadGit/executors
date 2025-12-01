@@ -159,7 +159,7 @@ func (r *Reconciler) reconcileDockerDeployment(process *core.Process, blueprint 
 
 	// Cleanup stopped containers (don't cleanup stale executors for DockerDeployment as they might not be executors)
 	r.addLog(process, "Running cleanup of stopped containers...")
-	if err := r.CleanupStoppedContainers(); err != nil {
+	if err := r.CleanupStoppedContainers(process); err != nil {
 		log.WithFields(log.Fields{"Error": err}).Warn("Failed to cleanup stopped containers")
 		r.addLog(process, fmt.Sprintf("Warning: Failed to cleanup stopped containers: %v", err))
 	}

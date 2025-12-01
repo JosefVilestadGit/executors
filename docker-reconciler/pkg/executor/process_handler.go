@@ -265,7 +265,7 @@ func (e *Executor) handleCleanup(process *core.Process) {
 	e.addProcessLog(process, fmt.Sprintf("Cleaning up containers for deleted blueprint: %s", blueprintName))
 
 	// Cleanup containers using the reconciler's cleanup method
-	if err := e.reconciler.CleanupDeletedBlueprint(blueprintName); err != nil {
+	if err := e.reconciler.CleanupDeletedBlueprint(process, blueprintName); err != nil {
 		errMsg := fmt.Sprintf("Cleanup failed for %s: %v", blueprintName, err)
 		e.addProcessLog(process, errMsg)
 		e.failProcess(process, errMsg)

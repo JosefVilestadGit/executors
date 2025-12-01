@@ -11,6 +11,79 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// FindOrphanedContainers finds running containers that don't have a corresponding executor registration
+// This detects containers where the executor registration was lost but the container is still running
+func (r *Reconciler) FindOrphanedContainers(process *core.Process, blueprint *core.Blueprint, executorType string) ([]string, error) {
+	ctx := context.Background()
+	var orphanedContainerIDs []string
+
+	// List running containers for this deployment
+	filterArgs := filters.NewArgs()
+	filterArgs.Add("label", "colonies.deployment="+blueprint.Metadata.Name)
+
+	containers, err := r.dockerClient.ContainerList(ctx, container.ListOptions{
+		All:     false, // Only running containers
+		Filters: filterArgs,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	if len(containers) == 0 {
+		return nil, nil
+	}
+
+	// Get all executors of the given type
+	executors, err := r.client.GetExecutors(r.colonyName, r.executorPrvKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list executors: %w", err)
+	}
+
+	// Build a set of registered executor names
+	registeredExecutors := make(map[string]bool)
+	for _, executor := range executors {
+		if executorType == "" || executor.Type == executorType {
+			registeredExecutors[executor.Name] = true
+		}
+	}
+
+	// Check each container
+	for _, cont := range containers {
+		// Get container name (remove leading slash if present)
+		containerName := ""
+		if len(cont.Names) > 0 {
+			containerName = cont.Names[0]
+			if len(containerName) > 0 && containerName[0] == '/' {
+				containerName = containerName[1:]
+			}
+		}
+
+		// Get generation from container label
+		generationStr := cont.Labels["colonies.generation"]
+		if generationStr == "" {
+			continue // Can't determine executor name without generation
+		}
+
+		// Construct expected executor name
+		executorName := fmt.Sprintf("%s-%s", containerName, generationStr)
+
+		// Check if executor is registered
+		if !registeredExecutors[executorName] {
+			r.addLog(process, fmt.Sprintf("[ORPHAN_DETECTION] Found orphaned container: %s (expected executor: %s not registered)",
+				containerName, executorName))
+			log.WithFields(log.Fields{
+				"ContainerID":      truncateID(cont.ID, 12),
+				"ContainerName":    containerName,
+				"ExpectedExecutor": executorName,
+				"Blueprint":        blueprint.Metadata.Name,
+			}).Warn("Found orphaned container without executor registration")
+			orphanedContainerIDs = append(orphanedContainerIDs, cont.ID)
+		}
+	}
+
+	return orphanedContainerIDs, nil
+}
+
 // shouldHandleBlueprint returns true if this reconciler should handle the given blueprint
 func (r *Reconciler) shouldHandleBlueprint(blueprint *core.Blueprint) bool {
 	if blueprint.Handler == nil {
@@ -76,7 +149,7 @@ func (r *Reconciler) HasOldGenerationContainers(blueprint *core.Blueprint) (bool
 
 // CleanupOldGenerationContainers removes containers from old generations as a safety net
 // This handles orphaned containers that might have been created during rapid blueprint updates
-func (r *Reconciler) CleanupOldGenerationContainers(blueprint *core.Blueprint) error {
+func (r *Reconciler) CleanupOldGenerationContainers(process *core.Process, blueprint *core.Blueprint) error {
 	ctx := context.Background()
 	currentGeneration := blueprint.Metadata.Generation
 
@@ -138,17 +211,22 @@ func (r *Reconciler) CleanupOldGenerationContainers(blueprint *core.Blueprint) e
 				// The executor name includes the generation it was created with
 				executorName := fmt.Sprintf("%s-%d", containerName, generation)
 
+				r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupOldGenerationContainers: reconciler=%s removing executor=%s reason=old_generation(gen=%d, current=%d) blueprint=%s",
+					r.executorName, executorName, generation, currentGeneration, blueprint.Metadata.Name))
+
 				if err := r.client.RemoveExecutor(r.colonyName, executorName, r.colonyOwnerKey); err != nil {
 					log.WithFields(log.Fields{
 						"Error":        err,
 						"ExecutorName": executorName,
 					}).Debug("Failed to deregister executor (may already be removed)")
+					r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupOldGenerationContainers: failed to remove executor=%s error=%v", executorName, err))
 					// Continue anyway - executor might already be deregistered
 				} else {
 					log.WithFields(log.Fields{
 						"ExecutorName": executorName,
 						"Generation":   generation,
 					}).Debug("Deregistered old generation executor")
+					r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupOldGenerationContainers: successfully removed executor=%s generation=%d", executorName, generation))
 				}
 			}
 
@@ -176,7 +254,7 @@ func (r *Reconciler) CleanupOldGenerationContainers(blueprint *core.Blueprint) e
 }
 
 // CleanupStoppedContainers removes all stopped/exited containers managed by the reconciler
-func (r *Reconciler) CleanupStoppedContainers() error {
+func (r *Reconciler) CleanupStoppedContainers(process *core.Process) error {
 	ctx := context.Background()
 
 	// List ALL containers (including stopped) with the managed label
@@ -225,7 +303,7 @@ func (r *Reconciler) CleanupStoppedContainers() error {
 
 // CleanupStaleExecutors removes executor registrations for containers that no longer exist
 // It only cleans up executors for blueprints this reconciler is responsible for handling
-func (r *Reconciler) CleanupStaleExecutors(deploymentName string, executorType string) error {
+func (r *Reconciler) CleanupStaleExecutors(process *core.Process, deploymentName string, executorType string) error {
 	// First, verify this reconciler should handle this deployment by checking the blueprint
 	if deploymentName != "" {
 		blueprint, err := r.client.GetBlueprint(r.colonyName, deploymentName, r.executorPrvKey)
@@ -334,14 +412,19 @@ func (r *Reconciler) CleanupStaleExecutors(deploymentName string, executorType s
 				"ExecutorType": executor.Type,
 			}).Info("Removing stale executor registration (container not found)")
 
+			r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupStaleExecutors: reconciler=%s removing executor=%s type=%s reason=container_not_found(expected_container=%s) deployment=%s",
+				r.executorName, executor.Name, executor.Type, containerName, deploymentName))
+
 			// Remove the executor registration
 			if err := r.client.RemoveExecutor(r.colonyName, executor.Name, r.colonyOwnerKey); err != nil {
 				log.WithFields(log.Fields{
 					"Error":      err,
 					"ExecutorID": executor.ID,
 				}).Warn("Failed to remove stale executor")
+				r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupStaleExecutors: failed to remove executor=%s error=%v", executor.Name, err))
 				continue
 			}
+			r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupStaleExecutors: successfully removed executor=%s", executor.Name))
 			removedCount++
 		}
 	}
@@ -354,7 +437,7 @@ func (r *Reconciler) CleanupStaleExecutors(deploymentName string, executorType s
 }
 
 // CleanupDeletedBlueprint removes all containers and executors for a deleted blueprint
-func (r *Reconciler) CleanupDeletedBlueprint(blueprintName string) error {
+func (r *Reconciler) CleanupDeletedBlueprint(process *core.Process, blueprintName string) error {
 	ctx := context.Background()
 
 	// List ALL containers for this deployment (including stopped)
@@ -404,15 +487,21 @@ func (r *Reconciler) CleanupDeletedBlueprint(blueprintName string) error {
 		// Deregister executor if this was an ExecutorDeployment
 		if containerName != "" && generation > 0 {
 			executorName := fmt.Sprintf("%s-%d", containerName, generation)
+
+			r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupDeletedBlueprint: reconciler=%s removing executor=%s reason=blueprint_deleted blueprint=%s generation=%d",
+				r.executorName, executorName, blueprintName, generation))
+
 			if err := r.client.RemoveExecutor(r.colonyName, executorName, r.colonyOwnerKey); err != nil {
 				log.WithFields(log.Fields{
 					"Error":        err,
 					"ExecutorName": executorName,
 				}).Debug("Failed to deregister executor (may already be removed)")
+				r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupDeletedBlueprint: failed to remove executor=%s error=%v", executorName, err))
 			} else {
 				log.WithFields(log.Fields{
 					"ExecutorName": executorName,
 				}).Debug("Deregistered executor for deleted blueprint")
+				r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupDeletedBlueprint: successfully removed executor=%s", executorName))
 			}
 		}
 

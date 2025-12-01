@@ -120,6 +120,52 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, blueprin
 		}
 	}
 
+	// For ExecutorDeployments, check for orphaned containers (containers without executor registrations)
+	// This handles the case where containers are running but their executors were removed
+	if blueprint.Kind == "ExecutorDeployment" {
+		orphanedContainers, err := r.FindOrphanedContainers(process, blueprint, spec.ExecutorType)
+		if err != nil {
+			r.addLog(process, fmt.Sprintf("Warning: Failed to check for orphaned containers: %v", err))
+		} else if len(orphanedContainers) > 0 {
+			r.addLog(process, fmt.Sprintf("Found %d orphaned container(s) without executor registrations, recreating...", len(orphanedContainers)))
+
+			for _, containerID := range orphanedContainers {
+				// Get container info before removing
+				inspect, err := r.dockerClient.ContainerInspect(context.Background(), containerID)
+				if err != nil {
+					r.addLog(process, fmt.Sprintf("Warning: Failed to inspect orphaned container %s: %v", containerID, err))
+					continue
+				}
+
+				containerName := inspect.Name
+				if len(containerName) > 0 && containerName[0] == '/' {
+					containerName = containerName[1:]
+				}
+
+				// Stop and remove the orphaned container
+				r.addLog(process, fmt.Sprintf("Removing orphaned container: %s (executor not registered)", containerName))
+				if err := r.stopAndRemoveContainer(containerID); err != nil {
+					r.addLog(process, fmt.Sprintf("Warning: Failed to remove orphaned container %s: %v", containerID, err))
+					continue
+				}
+
+				// Recreate the container with new spec and generation (this will also register the executor)
+				if err := r.startContainer(process, spec, containerName, blueprint); err != nil {
+					r.addLog(process, fmt.Sprintf("ERROR: Failed to recreate orphaned container %s: %v", containerName, err))
+					return fmt.Errorf("failed to recreate orphaned container %s: %w", containerName, err)
+				}
+				r.addLog(process, fmt.Sprintf("Recreated orphaned container: %s with generation %d", containerName, blueprint.Metadata.Generation))
+			}
+
+			// Refresh the container list after recreating orphaned ones
+			existingContainers, err = r.listContainersByLabel(blueprint.Metadata.Name)
+			if err != nil {
+				r.addLog(process, fmt.Sprintf("Warning: Failed to refresh container list: %v", err))
+				existingContainers = []string{}
+			}
+		}
+	}
+
 	// Count only RUNNING containers for replica comparison (stopped containers shouldn't count)
 	runningContainers, err := r.listRunningContainersByLabel(blueprint.Metadata.Name)
 	if err != nil {
@@ -233,19 +279,19 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, blueprin
 	}
 
 	// Cleanup old generation containers first (safety net for rapid updates)
-	if err := r.CleanupOldGenerationContainers(blueprint); err != nil {
+	if err := r.CleanupOldGenerationContainers(process, blueprint); err != nil {
 		log.WithFields(log.Fields{"Error": err}).Warn("Failed to cleanup old generation containers")
 		r.addLog(process, fmt.Sprintf("Warning: Failed to cleanup old generation containers: %v", err))
 	}
 
 	// Cleanup stopped containers and stale executor registrations
 	r.addLog(process, "Running cleanup of stopped containers and stale executors...")
-	if err := r.CleanupStoppedContainers(); err != nil {
+	if err := r.CleanupStoppedContainers(process); err != nil {
 		log.WithFields(log.Fields{"Error": err}).Warn("Failed to cleanup stopped containers")
 		r.addLog(process, fmt.Sprintf("Warning: Failed to cleanup stopped containers: %v", err))
 	}
 
-	if err := r.CleanupStaleExecutors(blueprint.Metadata.Name, spec.ExecutorType); err != nil {
+	if err := r.CleanupStaleExecutors(process, blueprint.Metadata.Name, spec.ExecutorType); err != nil {
 		log.WithFields(log.Fields{"Error": err}).Warn("Failed to cleanup stale executors")
 		r.addLog(process, fmt.Sprintf("Warning: Failed to cleanup stale executors: %v", err))
 	}

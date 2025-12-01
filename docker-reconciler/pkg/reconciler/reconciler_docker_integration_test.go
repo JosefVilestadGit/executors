@@ -345,7 +345,7 @@ func TestDockerIntegration_CleanupOldGenerationContainers(t *testing.T) {
 	}
 
 	// Cleanup old generation
-	err = reconciler.CleanupOldGenerationContainers(blueprint)
+	err = reconciler.CleanupOldGenerationContainers(nil, blueprint)
 	assert.NoError(t, err)
 
 	// Wait a bit for cleanup
@@ -392,7 +392,7 @@ func TestDockerIntegration_CleanupStoppedContainers(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Cleanup stopped containers
-	err = reconciler.CleanupStoppedContainers()
+	err = reconciler.CleanupStoppedContainers(nil)
 	assert.NoError(t, err)
 
 	// Wait for cleanup
