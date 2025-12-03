@@ -14,7 +14,7 @@ COPY executors ./executors
 COPY colonies ./colonies
 
 # Navigate to docker executor directory
-WORKDIR /build/executors/docker
+WORKDIR /build/executors/docker-executor
 
 # Download dependencies (replace directives will work now)
 RUN go mod download
@@ -33,6 +33,6 @@ RUN CGO_ENABLED=0 \
 FROM colonyos/colonies:v1.8.7
 
 WORKDIR /
-COPY --from=builder /build/executors/docker/docker_executor /bin/
+COPY --from=builder /build/executors/docker-executor/docker_executor /bin/
 RUN mkdir /cfs
 CMD ["docker_executor", "start", "-v"]

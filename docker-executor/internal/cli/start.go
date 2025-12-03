@@ -50,6 +50,8 @@ var startCmd = &cobra.Command{
 			executor.WithHardwareGPUNodesCount(HWGPUNodeCount),
 			executor.WithHardwareGPUName(HWGPUName),
 			executor.WithHardwareGPUMemory(HWGPUMem),
+			executor.WithHardwarePlatform(HWPlatform),
+			executor.WithHardwareArchitecture(HWArchitecture),
 			executor.WithLong(Long),
 			executor.WithLat(Lat),
 			executor.WithLocDesc(LocDesc),
@@ -141,6 +143,8 @@ func parseEnv() {
 
 	HWGPUName = os.Getenv("EXECUTOR_HW_GPU_NAME")
 	HWGPUMem = os.Getenv("EXECUTOR_HW_GPU_MEM")
+	HWPlatform = os.Getenv("EXECUTOR_HW_PLATFORM")
+	HWArchitecture = os.Getenv("EXECUTOR_HW_ARCHITECTURE")
 	LocDesc = os.Getenv("EXECUTOR_LOCATION_DESC")
 
 	longStr := os.Getenv("EXECUTOR_LOCATION_LONG")

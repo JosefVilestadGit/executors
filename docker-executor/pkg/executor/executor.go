@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"os/signal"
-	"runtime"
 	"strconv"
 	"syscall"
 	"time"
@@ -46,6 +45,8 @@ type Executor struct {
 	hwGPUNodesCount    int
 	hwGPUName          string
 	hwGPUMem           string
+	hwPlatform         string
+	hwArchitecture     string
 	long               float64
 	lat                float64
 	locDesc            string
@@ -202,6 +203,18 @@ func WithHardwareGPUMemory(hwGPUMem string) ExecutorOption {
 	}
 }
 
+func WithHardwarePlatform(hwPlatform string) ExecutorOption {
+	return func(e *Executor) {
+		e.hwPlatform = hwPlatform
+	}
+}
+
+func WithHardwareArchitecture(hwArchitecture string) ExecutorOption {
+	return func(e *Executor) {
+		e.hwArchitecture = hwArchitecture
+	}
+}
+
 func WithLong(long float64) ExecutorOption {
 	return func(e *Executor) {
 		e.long = long
@@ -263,45 +276,33 @@ func (e *Executor) createColoniesExecutorWithKey(colonyName string) (*core.Execu
 	}
 
 	executor := core.CreateExecutor(executorID, e.executorType, e.executorName, colonyName, time.Now(), time.Now())
-	executor.Capabilities.Software.Name = e.swName
-	executor.Capabilities.Software.Type = e.swType
-	executor.Capabilities.Software.Version = e.swVersion
-	executor.Capabilities.Hardware.CPU = e.hwCPU
-	executor.Capabilities.Hardware.Model = e.hwModel
-	executor.Capabilities.Hardware.Nodes = e.hwNodes
-	executor.Capabilities.Hardware.Storage = e.hwStorage
-	executor.Capabilities.Hardware.Memory = e.hwMem
-	executor.Capabilities.Hardware.GPU.Count = e.hwGPUCount
-	executor.Capabilities.Hardware.GPU.NodeCount = e.hwGPUNodesCount
-	executor.Capabilities.Hardware.GPU.Name = e.hwGPUName
-	executor.Capabilities.Hardware.GPU.Memory = e.hwGPUMem
+	executor.Capabilities.Software = []core.Software{
+		{
+			Name:    e.swName,
+			Type:    e.swType,
+			Version: e.swVersion,
+		},
+	}
+	executor.Capabilities.Hardware = []core.Hardware{
+		{
+			CPU:          e.hwCPU,
+			Model:        e.hwModel,
+			Nodes:        e.hwNodes,
+			Storage:      e.hwStorage,
+			Memory:       e.hwMem,
+			Platform:     e.hwPlatform,
+			Architecture: e.hwArchitecture,
+			GPU: core.GPU{
+				Count:     e.hwGPUCount,
+				NodeCount: e.hwGPUNodesCount,
+				Name:      e.hwGPUName,
+				Memory:    e.hwGPUMem,
+			},
+		},
+	}
 	executor.Location.Description = e.locDesc
 	executor.Location.Long = e.long
 	executor.Location.Lat = e.lat
-
-	log.Info("Checking for node metadata environment variables...")
-	// Check for node metadata from environment variables (for backward compatibility with node registration)
-	nodeName := os.Getenv("COLONIES_NODE_NAME")
-	location := os.Getenv("COLONIES_NODE_LOCATION")
-
-	if nodeName != "" && location != "" {
-		// If node metadata is present, add it to the executor for auto-registration
-		executor.NodeMetadata = &core.NodeMetadata{
-			Hostname:     nodeName,
-			Location:     location,
-			Platform:     runtime.GOOS,
-			Architecture: runtime.GOARCH,
-			CPU:          runtime.NumCPU(),
-			Capabilities: []string{"docker"},
-		}
-		log.WithFields(log.Fields{
-			"NodeName":     nodeName,
-			"NodeLocation": location,
-			"Platform":     runtime.GOOS,
-			"Architecture": runtime.GOARCH,
-			"CPUCores":     runtime.NumCPU(),
-		}).Info("Detected node metadata from environment, will register under node")
-	}
 
 	return executor, executorID, executorPrvKey, nil
 }

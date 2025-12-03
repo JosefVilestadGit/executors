@@ -35,6 +35,8 @@ var HWGPUCount int
 var HWGPUNodeCount int
 var HWGPUName string
 var HWGPUMem string
+var HWPlatform string
+var HWArchitecture string
 var LocDesc string
 var Lat float64
 var Long float64
