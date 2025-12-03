@@ -21,5 +21,7 @@ go.work
 # Environment files (local overrides)
 .env
 
+docker-reconciler
+
 # docker-compose.env is tracked (contains dev/example config)
 # For production, create a separate file or use .env for overrides

@@ -1,0 +1,107 @@
+version: '3.8'
+
+services:
+  docker-reconciler:
+    image: colonyos/docker-reconciler:latest
+    container_name: docker-reconciler-apple-ultra
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+    environment:
+      COLONIES_SERVER_HOST: ${COLONIES_SERVER_HOST}
+      COLONIES_SERVER_PORT: ${COLONIES_SERVER_PORT}
+      COLONIES_TLS: ${COLONIES_TLS}
+      COLONIES_COLONY_NAME: ${COLONIES_COLONY_NAME}
+      COLONIES_COLONY_PRVKEY: ${COLONIES_COLONY_PRVKEY}
+      COLONIES_EXECUTOR_NAME: ${COLONIES_EXECUTOR_NAME}
+      COLONIES_EXECUTOR_TYPE: ${COLONIES_EXECUTOR_TYPE}
+      COLONIES_EXECUTOR_LOCATION: ${COLONIES_EXECUTOR_LOCATION}
+      EXECUTOR_HW_MODEL: ${EXECUTOR_HW_MODEL}
+      EXECUTOR_HW_CPU: ${EXECUTOR_HW_CPU}
+      EXECUTOR_HW_CPU_CORES: ${EXECUTOR_HW_CPU_CORES}
+      EXECUTOR_HW_MEM: ${EXECUTOR_HW_MEM}
+      EXECUTOR_HW_STORAGE: ${EXECUTOR_HW_STORAGE}
+      EXECUTOR_HW_PLATFORM: ${EXECUTOR_HW_PLATFORM}
+      EXECUTOR_HW_ARCHITECTURE: ${EXECUTOR_HW_ARCHITECTURE}
+      EXECUTOR_HW_GPU_NAME: ${EXECUTOR_HW_GPU_NAME}
+      EXECUTOR_HW_GPU_COUNT: ${EXECUTOR_HW_GPU_COUNT}
+      EXECUTOR_HW_GPU_MEM: ${EXECUTOR_HW_GPU_MEM}
+      EXECUTOR_HW_NODES: ${EXECUTOR_HW_NODES}
+      EXECUTOR_HW_GPU_NODES_COUNT: ${EXECUTOR_HW_GPU_NODES_COUNT}
+      EXECUTOR_LOCATION_LONG: ${EXECUTOR_LOCATION_LONG}
+      EXECUTOR_LOCATION_LAT: ${EXECUTOR_LOCATION_LAT}
+      EXECUTOR_LOCATION_NAME: ${EXECUTOR_LOCATION_NAME}
+      EXECUTOR_LOCATION_DESC: ${EXECUTOR_LOCATION_DESC}
+      AWS_S3_ENDPOINT: ${AWS_S3_ENDPOINT}
+      AWS_S3_ACCESSKEY: ${AWS_S3_ACCESSKEY}
+      AWS_S3_SECRETKEY: ${AWS_S3_SECRETKEY}
+      AWS_S3_REGION_KEY: ${AWS_S3_REGION_KEY}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+      AWS_S3_TLS: ${AWS_S3_TLS}
+      AWS_S3_SKIPVERIFY: ${AWS_S3_SKIPVERIFY}
+      DOCKER_NETWORK: ${DOCKER_NETWORK:-reconciler_default}
+    network_mode: host
+
+  blueprint-init:
+    image: colonyos/colonies:latest
+    container_name: blueprint-init-apple-ultra
+    depends_on:
+      - docker-reconciler
+    network_mode: host
+    volumes:
+      - ${BLUEPRINT_PATH}:/blueprint.json:ro
+      - ../../blueprint-definitions:/definitions:ro
+    environment:
+      COLONIES_SERVER_HOST: ${COLONIES_SERVER_HOST}
+      COLONIES_SERVER_PORT: ${COLONIES_SERVER_PORT}
+      COLONIES_TLS: ${COLONIES_TLS}
+      COLONIES_COLONY_NAME: ${COLONIES_COLONY_NAME}
+      COLONIES_COLONY_PRVKEY: ${COLONIES_COLONY_PRVKEY}
+      COLONIES_PRVKEY: ${COLONIES_PRVKEY}
+      RECONCILER_NAME: ${COLONIES_EXECUTOR_NAME}
+      BLUEPRINT_NAME: ${BLUEPRINT_NAME:-}
+      BLUEPRINT_PATH: ${BLUEPRINT_PATH:-}
+    entrypoint: /bin/sh
+    command: >
+      -c "
+      echo \"Connecting to $${COLONIES_SERVER_HOST}:$${COLONIES_SERVER_PORT}\";
+      echo \"Waiting for $${RECONCILER_NAME} to register...\";
+      for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        result=$$(colonies executor ls 2>&1) || true;
+        if echo \"$$result\" | grep -q \"$${RECONCILER_NAME}\"; then
+          echo \"$${RECONCILER_NAME} is registered\";
+          break;
+        fi;
+        echo \"Attempt $$i: waiting for $${RECONCILER_NAME}... ($$result)\";
+        sleep 2;
+      done;
+
+      echo 'Adding blueprint definitions...';
+
+      echo 'Adding docker-deployment definition...';
+      if colonies blueprint definition get --name docker-deployment >/dev/null 2>&1; then
+        echo 'docker-deployment definition already exists';
+      else
+        colonies blueprint definition add --spec /definitions/docker-deployment-definition.json && echo 'Added docker-deployment definition' || echo 'Failed to add docker-deployment definition';
+      fi;
+
+      echo 'Adding executor-deployment definition...';
+      if colonies blueprint definition get --name executordeployments.compute.colonies.io >/dev/null 2>&1; then
+        echo 'executor-deployment definition already exists';
+      else
+        colonies blueprint definition add --spec /definitions/executor-deployment-definition.json && echo 'Added executor-deployment definition' || echo 'Failed to add executor-deployment definition';
+      fi;
+
+      if [ -n \"$${BLUEPRINT_NAME}\" ] && [ -f \"/blueprint.json\" ]; then
+        echo \"Auto-adding blueprint: $${BLUEPRINT_NAME}\";
+        if colonies blueprint get --name \"$${BLUEPRINT_NAME}\" >/dev/null 2>&1; then
+          echo \"Blueprint $${BLUEPRINT_NAME} already exists\";
+        else
+          colonies blueprint add --spec /blueprint.json && echo \"Added blueprint $${BLUEPRINT_NAME}\" || echo \"Failed to add blueprint $${BLUEPRINT_NAME}\";
+        fi;
+      else
+        echo 'No BLUEPRINT_NAME set or blueprint.json not mounted, skipping blueprint auto-add';
+      fi;
+
+      echo 'Blueprint init complete';
+      "
