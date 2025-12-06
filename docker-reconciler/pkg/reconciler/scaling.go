@@ -56,15 +56,12 @@ func (r *Reconciler) AdjustReplicas(blueprint *core.Blueprint) error {
 // scaleUp starts new containers to reach desired replica count
 func (r *Reconciler) scaleUp(blueprint *core.Blueprint, spec DeploymentSpec, current, desired int) error {
 	containersToStart := desired - current
-	log.WithFields(log.Fields{
-		"BlueprintName": blueprint.Metadata.Name,
-		"Current":       current,
-		"Desired":       desired,
-		"ToStart":       containersToStart,
-	}).Info("Self-healing: scaling up")
+	r.addLog(nil, fmt.Sprintf("Self-healing: Scaling up %s from %d to %d replicas (starting %d container(s))",
+		blueprint.Metadata.Name, current, desired, containersToStart))
 
 	// Pull image first
 	if err := r.pullImage(nil, spec.Image); err != nil {
+		r.addErrorLog(nil, fmt.Sprintf("Self-healing: Failed to pull image %s: %v", spec.Image, err))
 		return fmt.Errorf("failed to pull image: %w", err)
 	}
 
@@ -72,31 +69,28 @@ func (r *Reconciler) scaleUp(blueprint *core.Blueprint, spec DeploymentSpec, cur
 		// Generate unique executor name
 		uniqueExecutorName, err := r.generateUniqueExecutorName(blueprint.Metadata.ColonyName, blueprint.Metadata.Name)
 		if err != nil {
+			r.addErrorLog(nil, fmt.Sprintf("Self-healing: Failed to generate executor name: %v", err))
 			return fmt.Errorf("failed to generate unique executor name: %w", err)
 		}
 
+		r.addLog(nil, fmt.Sprintf("Self-healing: Starting container %s for %s", uniqueExecutorName, blueprint.Metadata.Name))
 		if err := r.startContainer(nil, spec, uniqueExecutorName, blueprint); err != nil {
+			r.addErrorLog(nil, fmt.Sprintf("Self-healing: Failed to start container %s: %v", uniqueExecutorName, err))
 			return fmt.Errorf("failed to start container %s: %w", uniqueExecutorName, err)
 		}
 
-		log.WithFields(log.Fields{
-			"ContainerName": uniqueExecutorName,
-			"BlueprintName": blueprint.Metadata.Name,
-		}).Info("Self-healing: started container")
+		r.addLog(nil, fmt.Sprintf("Self-healing: Container %s started successfully", uniqueExecutorName))
 	}
 
+	r.addLog(nil, fmt.Sprintf("Self-healing: Scale up complete for %s", blueprint.Metadata.Name))
 	return nil
 }
 
 // scaleDown stops and removes excess containers to reach desired replica count
 func (r *Reconciler) scaleDown(blueprint *core.Blueprint, current, desired int) error {
 	containersToStop := current - desired
-	log.WithFields(log.Fields{
-		"BlueprintName": blueprint.Metadata.Name,
-		"Current":       current,
-		"Desired":       desired,
-		"ToStop":        containersToStop,
-	}).Info("Self-healing: scaling down")
+	r.addLog(nil, fmt.Sprintf("Self-healing: Scaling down %s from %d to %d replicas (stopping %d container(s))",
+		blueprint.Metadata.Name, current, desired, containersToStop))
 
 	ctx := context.Background()
 	filterArgs := filters.NewArgs()
@@ -106,6 +100,7 @@ func (r *Reconciler) scaleDown(blueprint *core.Blueprint, current, desired int) 
 		Filters: filterArgs,
 	})
 	if err != nil {
+		r.addErrorLog(nil, fmt.Sprintf("Self-healing: Failed to list containers for scale down: %v", err))
 		return fmt.Errorf("failed to list containers for scale down: %w", err)
 	}
 
@@ -130,43 +125,30 @@ func (r *Reconciler) scaleDown(blueprint *core.Blueprint, current, desired int) 
 			if containerGeneration == "" {
 				// Fallback to blueprint generation if label not found (shouldn't happen)
 				containerGeneration = fmt.Sprintf("%d", blueprint.Metadata.Generation)
-				log.WithFields(log.Fields{
-					"ContainerName": containerName,
-				}).Warn("Container missing colonies.generation label, using blueprint generation")
+				r.addWarnLog(nil, fmt.Sprintf("Self-healing: Container %s missing generation label, using blueprint generation", containerName))
 			}
 
 			// Executor name includes generation suffix (e.g., "docker-executor-abc-5")
 			executorName := fmt.Sprintf("%s-%s", containerName, containerGeneration)
-
-			log.WithFields(log.Fields{
-				"ExecutorName":        executorName,
-				"ContainerID":         truncateID(containerID, 12),
-				"ContainerGeneration": containerGeneration,
-			}).Info("Self-healing: deregistering executor before stopping container")
+			r.addLog(nil, fmt.Sprintf("Self-healing: Deregistering executor %s before stopping container", executorName))
 
 			if err := r.client.RemoveExecutor(r.colonyName, executorName, r.colonyOwnerKey); err != nil {
-				log.WithFields(log.Fields{
-					"Error":        err,
-					"ExecutorName": executorName,
-				}).Warn("Failed to deregister executor")
+				r.addWarnLog(nil, fmt.Sprintf("Self-healing: Failed to deregister executor %s: %v", executorName, err))
 				// Continue anyway to stop the container
+			} else {
+				r.addLog(nil, fmt.Sprintf("Self-healing: Deregistered executor %s", executorName))
 			}
 		}
 
 		// Stop and remove the container
+		r.addLog(nil, fmt.Sprintf("Self-healing: Stopping container %s", containerName))
 		if err := r.stopAndRemoveContainer(containerID); err != nil {
-			log.WithFields(log.Fields{
-				"Error":         err,
-				"ContainerID":   truncateID(containerID, 12),
-				"ContainerName": containerName,
-			}).Warn("Self-healing: failed to stop container")
+			r.addWarnLog(nil, fmt.Sprintf("Self-healing: Failed to stop container %s: %v", containerName, err))
 		} else {
-			log.WithFields(log.Fields{
-				"ContainerName": containerName,
-				"BlueprintName": blueprint.Metadata.Name,
-			}).Info("Self-healing: stopped and removed container")
+			r.addLog(nil, fmt.Sprintf("Self-healing: Stopped and removed container %s", containerName))
 		}
 	}
 
+	r.addLog(nil, fmt.Sprintf("Self-healing: Scale down complete for %s", blueprint.Metadata.Name))
 	return nil
 }

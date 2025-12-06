@@ -50,7 +50,7 @@ services:
     network_mode: host
     volumes:
       - ${BLUEPRINT_PATH}:/blueprint.json:ro
-      - ../../blueprint-definitions:/definitions:ro
+      - ./blueprint-definitions:/definitions:ro
     environment:
       COLONIES_SERVER_HOST: ${COLONIES_SERVER_HOST}
       COLONIES_SERVER_PORT: ${COLONIES_SERVER_PORT}

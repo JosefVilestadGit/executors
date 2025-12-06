@@ -478,10 +478,10 @@ func TestLocationInheritance(t *testing.T) {
 		executorName := "test-container-executor"
 
 		executor := core.CreateExecutor(executorID, executorType, executorName, reconciler.colonyName, time.Now(), time.Now())
-		executor.Location = core.Location{Description: reconciler.location}
+		executor.LocationName = reconciler.location
 
 		// Verify location was set correctly
-		assert.Equal(t, "test-datacenter", executor.Location.Description)
+		assert.Equal(t, "test-datacenter", executor.LocationName)
 		assert.Equal(t, "test-colony", executor.ColonyName)
 		assert.Equal(t, "container-executor", executor.Type)
 		assert.Equal(t, "test-container-executor", executor.Name)
@@ -505,13 +505,13 @@ func TestLocationInheritance(t *testing.T) {
 				time.Now(),
 				time.Now(),
 			)
-			executor.Location = core.Location{Description: reconciler.location}
+			executor.LocationName = reconciler.location
 			executors[i] = executor
 		}
 
 		// Verify all executors have same location
 		for _, executor := range executors {
-			assert.Equal(t, "edge-datacenter", executor.Location.Description)
+			assert.Equal(t, "edge-datacenter", executor.LocationName)
 			assert.Equal(t, "production", executor.ColonyName)
 		}
 	})
@@ -536,9 +536,9 @@ func TestLocationInheritance(t *testing.T) {
 			time.Now(),
 			time.Now(),
 		)
-		executor.Location = core.Location{Description: reconciler.location}
+		executor.LocationName = reconciler.location
 
-		assert.Equal(t, "local-datacenter", executor.Location.Description)
+		assert.Equal(t, "local-datacenter", executor.LocationName)
 	})
 }
 

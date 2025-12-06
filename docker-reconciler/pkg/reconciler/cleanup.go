@@ -154,27 +154,10 @@ func (r *Reconciler) FindOrphanedContainers(process *core.Process, blueprint *co
 }
 
 // shouldHandleBlueprint returns true if this reconciler should handle the given blueprint
+// Process routing already handles executor type and location targeting
 func (r *Reconciler) shouldHandleBlueprint(blueprint *core.Blueprint) bool {
-	if blueprint.Handler == nil {
-		return false
-	}
-
-	// Check single executor name
-	if blueprint.Handler.ExecutorName != "" {
-		return blueprint.Handler.ExecutorName == r.executorName
-	}
-
-	// Check list of executor names
-	if len(blueprint.Handler.ExecutorNames) > 0 {
-		for _, name := range blueprint.Handler.ExecutorNames {
-			if name == r.executorName {
-				return true
-			}
-		}
-		return false
-	}
-
-	return false
+	// Blueprint must have a handler defined
+	return blueprint.Handler != nil
 }
 
 // HasOldGenerationContainers checks if any containers have old generation labels
@@ -390,7 +373,6 @@ func (r *Reconciler) CleanupStaleExecutors(process *core.Process, deploymentName
 			log.WithFields(log.Fields{
 				"DeploymentName": deploymentName,
 				"ReconcilerName": r.executorName,
-				"HandlerName":    blueprint.Handler.ExecutorName,
 			}).Debug("Skipping stale executor cleanup - blueprint not handled by this reconciler")
 			return nil
 		}

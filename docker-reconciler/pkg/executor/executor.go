@@ -31,6 +31,7 @@ type Executor struct {
 	executorID         string
 	executorPrvKey     string
 	executorType       string
+	location           string
 	ctx                context.Context
 	cancel             context.CancelFunc
 	client             *client.ColoniesClient
@@ -80,18 +81,7 @@ func populateCapabilitiesFromEnv(executor *core.Executor) {
 	}
 
 	// Location settings
-	executor.Location.Name = os.Getenv("EXECUTOR_LOCATION_NAME")
-	executor.Location.Description = os.Getenv("EXECUTOR_LOCATION_DESC")
-	if longStr := os.Getenv("EXECUTOR_LOCATION_LONG"); longStr != "" {
-		if long, err := strconv.ParseFloat(longStr, 64); err == nil {
-			executor.Location.Long = long
-		}
-	}
-	if latStr := os.Getenv("EXECUTOR_LOCATION_LAT"); latStr != "" {
-		if lat, err := strconv.ParseFloat(latStr, 64); err == nil {
-			executor.Location.Lat = lat
-		}
-	}
+	executor.LocationName = os.Getenv("EXECUTOR_LOCATION_NAME")
 }
 
 // createColoniesExecutorWithKey creates a new executor with generated keys
@@ -165,13 +155,13 @@ func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
 	}
 
 	// Get location from environment for child executors
-	location := os.Getenv("COLONIES_EXECUTOR_LOCATION")
-	if location == "" {
-		location = "default"
+	e.location = os.Getenv("COLONIES_EXECUTOR_LOCATION")
+	if e.location == "" {
+		e.location = "default"
 	}
 
 	// Create reconciler with colony owner key for executor registration
-	e.reconciler, err = reconciler.CreateReconciler(e.client, e.executorPrvKey, e.colonyPrvKey, e.colonyName, e.executorName, location)
+	e.reconciler, err = reconciler.CreateReconciler(e.client, e.executorPrvKey, e.colonyPrvKey, e.colonyName, e.executorName, e.location)
 	if err != nil {
 		return nil, err
 	}

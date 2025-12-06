@@ -395,11 +395,7 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 		if locName == "" {
 			locName = os.Getenv("EXECUTOR_LOCATION_NAME")
 		}
-		locDesc := envMap["EXECUTOR_LOCATION_DESC"]
-		if locDesc == "" {
-			locDesc = r.location
-		}
-		newExecutor.Location = core.Location{Name: locName, Description: locDesc}
+		newExecutor.LocationName = locName
 
 		addedExecutor, err := r.client.AddExecutor(newExecutor, r.colonyOwnerKey)
 		if err != nil {
@@ -552,21 +548,30 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 	}
 
 	// Create the container
+	r.addLog(process, fmt.Sprintf("Docker: Creating container %s from image %s", containerName, spec.Image))
 	resp, err := r.dockerClient.ContainerCreate(ctx, config, hostConfig, networkConfig, nil, containerName)
 	if err != nil {
+		r.addErrorLog(process, fmt.Sprintf("Docker: Failed to create container %s: %v", containerName, err))
 		return fmt.Errorf("failed to create container: %w", err)
 	}
+	r.addLog(process, fmt.Sprintf("Docker: Container created with ID %s", truncateID(resp.ID, 12)))
 
 	// Start the container
+	r.addLog(process, fmt.Sprintf("Docker: Starting container %s", containerName))
 	if err := r.dockerClient.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		r.addErrorLog(process, fmt.Sprintf("Docker: Failed to start container %s: %v", containerName, err))
 		return fmt.Errorf("failed to start container: %w", err)
 	}
 
 	// Wait for container to be running (with 30 second timeout)
+	r.addLog(process, fmt.Sprintf("Docker: Waiting for container %s to reach running state", containerName))
 	if err := r.waitForContainerRunning(resp.ID, 30*time.Second); err != nil {
+		// Get container logs on failure to help debugging
+		r.addErrorLog(process, fmt.Sprintf("Docker: Container %s failed to start: %v", containerName, err))
 		return fmt.Errorf("container failed to start: %w", err)
 	}
 
+	r.addLog(process, fmt.Sprintf("Docker: Container %s is now running (ID: %s)", containerName, truncateID(resp.ID, 12)))
 	log.WithFields(log.Fields{
 		"ContainerID":   resp.ID,
 		"ContainerName": containerName,

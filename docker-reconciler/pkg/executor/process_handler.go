@@ -33,10 +33,14 @@ func (e *Executor) handleConsolidatedReconcile(process *core.Process, kind strin
 		blueprintName = name
 	}
 
+	// Get location from process Conditions (set by the server/cron)
+	locationName := process.FunctionSpec.Conditions.LocationName
+
 	log.WithFields(log.Fields{
 		"ProcessID":     process.ID,
 		"Kind":          kind,
 		"BlueprintName": blueprintName,
+		"LocationName":  locationName,
 	}).Info("Reconciliation request")
 
 	// Check for force flag in kwargs
@@ -48,6 +52,8 @@ func (e *Executor) handleConsolidatedReconcile(process *core.Process, kind strin
 	// Add log to process for visibility via `colonies log get`
 	if blueprintName != "" {
 		e.addProcessLog(process, "Starting reconciliation for blueprint: "+blueprintName)
+	} else if locationName != "" {
+		e.addProcessLog(process, fmt.Sprintf("Starting reconciliation for Kind: %s at location: %s", kind, locationName))
 	} else {
 		e.addProcessLog(process, "Starting reconciliation for Kind: "+kind)
 	}
@@ -55,8 +61,8 @@ func (e *Executor) handleConsolidatedReconcile(process *core.Process, kind strin
 		e.addProcessLog(process, "Force flag enabled - will recreate all containers")
 	}
 
-	// Fetch all blueprints of this Kind from server
-	allBlueprints, err := e.client.GetBlueprints(e.colonyName, kind, e.colonyPrvKey)
+	// Fetch blueprints of this Kind from server, filtered by location if specified
+	allBlueprints, err := e.client.GetBlueprintsByLocation(e.colonyName, kind, locationName, e.colonyPrvKey)
 	if err != nil {
 		errMsg := fmt.Sprintf("Failed to fetch blueprints for kind %s: %v", kind, err)
 		e.addProcessLog(process, errMsg)
@@ -77,7 +83,7 @@ func (e *Executor) handleConsolidatedReconcile(process *core.Process, kind strin
 		} else {
 			log.WithFields(log.Fields{
 				"BlueprintName":   blueprint.Metadata.Name,
-				"HandlerExecutor": getHandlerExecutorName(blueprint),
+				"HandlerExecutor": getHandlerExecutorType(blueprint),
 				"MyExecutorName":  e.executorName,
 			}).Debug("Skipping blueprint not assigned to this executor")
 		}

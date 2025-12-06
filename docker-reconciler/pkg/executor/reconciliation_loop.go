@@ -2,7 +2,7 @@ package executor
 
 import (
 	"errors"
-	"fmt"
+	"strings"
 	"time"
 
 	"github.com/colonyos/colonies/pkg/core"
@@ -103,7 +103,7 @@ func (e *Executor) performStartupReconciliation() {
 		} else {
 			log.WithFields(log.Fields{
 				"BlueprintName":   blueprint.Metadata.Name,
-				"HandlerExecutor": getHandlerExecutorName(blueprint),
+				"HandlerExecutor": getHandlerExecutorType(blueprint),
 				"MyExecutorName":  e.executorName,
 			}).Debug("Skipping blueprint not assigned to this executor")
 		}
@@ -190,41 +190,35 @@ func (e *Executor) performStartupReconciliation() {
 }
 
 // shouldHandleBlueprint returns true if this executor should handle the given blueprint
+// Checks that the handler executor type and location match this reconciler's configuration
 func (e *Executor) shouldHandleBlueprint(blueprint *core.Blueprint) bool {
+	// Blueprint must have a handler defined
 	if blueprint.Handler == nil {
-		// No handler specified - blueprints without handlers should not be reconciled by startup
 		return false
 	}
 
-	// Check single executor name
-	if blueprint.Handler.ExecutorName != "" {
-		return blueprint.Handler.ExecutorName == e.executorName
-	}
-
-	// Check list of executor names
-	if len(blueprint.Handler.ExecutorNames) > 0 {
-		for _, name := range blueprint.Handler.ExecutorNames {
-			if name == e.executorName {
-				return true
-			}
-		}
+	// Check executor type matches
+	if blueprint.Handler.ExecutorType != e.executorType {
 		return false
 	}
 
-	// No executor name specified - don't handle it
-	return false
+	// Check location matches (case-insensitive)
+	blueprintLocation := strings.ToLower(blueprint.Metadata.LocationName)
+	myLocation := strings.ToLower(e.location)
+	if blueprintLocation != myLocation {
+		return false
+	}
+
+	return true
 }
 
-// getHandlerExecutorName returns the executor name from the blueprint handler for logging
-func getHandlerExecutorName(blueprint *core.Blueprint) string {
+// getHandlerExecutorType returns the executor type from the blueprint handler for logging
+func getHandlerExecutorType(blueprint *core.Blueprint) string {
 	if blueprint.Handler == nil {
 		return "<no handler>"
 	}
-	if blueprint.Handler.ExecutorName != "" {
-		return blueprint.Handler.ExecutorName
+	if blueprint.Handler.ExecutorType != "" {
+		return blueprint.Handler.ExecutorType
 	}
-	if len(blueprint.Handler.ExecutorNames) > 0 {
-		return fmt.Sprintf("%v", blueprint.Handler.ExecutorNames)
-	}
-	return "<no executor specified>"
+	return "<no executor type specified>"
 }
