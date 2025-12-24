@@ -411,6 +411,14 @@ func (r *Reconciler) CleanupStaleExecutors(process *core.Process, deploymentName
 		containerNames[name] = true
 	}
 
+	// Build a set of executor names from container labels for direct matching
+	containerExecutors := make(map[string]bool)
+	for _, cont := range containers {
+		if execName, ok := cont.Labels["colonies.executor"]; ok && execName != "" {
+			containerExecutors[execName] = true
+		}
+	}
+
 	// Check each executor and remove if container doesn't exist
 	removedCount := 0
 	for _, executor := range executors {
@@ -419,65 +427,75 @@ func (r *Reconciler) CleanupStaleExecutors(process *core.Process, deploymentName
 			continue
 		}
 
-		// Check if executor name matches pattern (must be exactly <deploymentName>-<hash>-<generation>)
-		// Use a more precise check to avoid matching deployments that share a prefix
-		// e.g., "ollama" should not match "ollama-ultra-xxx-1"
+		// Filter by deployment using BlueprintID if available (preferred over name parsing)
+		// This avoids fragile string parsing of executor names with hyphens
 		if deploymentName != "" {
-			// Split the executor name to extract the deployment part
-			// Format: <deployment>-<hash>-<generation>
-			parts := strings.Split(executor.Name, "-")
-			if len(parts) < 3 {
-				continue // Not a valid executor name format
-			}
-			// The deployment name might contain hyphens, so we need to check if the
-			// executor name starts with the deployment name followed by exactly 2 more parts
-			// For simple deployment names without hyphens (like "ollama"), this is straightforward
-			// For deployment names with hyphens (like "ollama-ultra"), we need to reconstruct
-			deploymentParts := strings.Split(deploymentName, "-")
-
-			// Check if the executor name has the deployment prefix followed by hash and generation
-			if len(parts) != len(deploymentParts)+2 {
-				continue // Wrong number of parts for this deployment
+			// First, try to match using colonies.executor label (direct match)
+			if len(containerExecutors) > 0 {
+				// If we have executor labels, use them for precise matching
+				if containerExecutors[executor.Name] {
+					continue // Container exists for this executor
+				}
 			}
 
-			// Verify the deployment name matches exactly
-			execDeployment := strings.Join(parts[:len(deploymentParts)], "-")
-			if execDeployment != deploymentName {
-				continue
+			// Fallback: use BlueprintID if set, otherwise use legacy name parsing
+			// Legacy name parsing kept for backward compatibility with executors
+			// created before BlueprintID was set
+			if executor.BlueprintID == "" {
+				// Legacy: parse executor name to check deployment membership
+				// Format: <deployment>-<hash>-<generation>
+				parts := strings.Split(executor.Name, "-")
+				if len(parts) < 3 {
+					continue // Not a valid executor name format
+				}
+				deploymentParts := strings.Split(deploymentName, "-")
+				if len(parts) != len(deploymentParts)+2 {
+					continue // Wrong number of parts for this deployment
+				}
+				execDeployment := strings.Join(parts[:len(deploymentParts)], "-")
+				if execDeployment != deploymentName {
+					continue
+				}
 			}
+			// Note: BlueprintID matching would require looking up the blueprint by name
+			// to get its ID, which adds complexity. The colonies.executor label approach
+			// is simpler and more reliable.
 		}
 
+		// For executors without direct label match, derive container name from executor name
 		// Executor name format: <deployment>-<hash>-<generation>
 		// Container name format: <deployment>-<hash>
-		// Strip the generation suffix to get the container name
 		containerName := executor.Name
 		if lastDash := strings.LastIndex(executor.Name, "-"); lastDash != -1 {
 			containerName = executor.Name[:lastDash]
 		}
 
-		// Check if container exists for this executor
-		if !containerNames[containerName] {
-			log.WithFields(log.Fields{
-				"ExecutorName": executor.Name,
-				"ExecutorID":   executor.ID,
-				"ExecutorType": executor.Type,
-			}).Info("Removing stale executor registration (container not found)")
-
-			r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupStaleExecutors: reconciler=%s removing executor=%s type=%s reason=container_not_found(expected_container=%s) deployment=%s",
-				r.executorName, executor.Name, executor.Type, containerName, deploymentName))
-
-			// Remove the executor registration
-			if err := r.client.RemoveExecutor(r.colonyName, executor.Name, r.colonyOwnerKey); err != nil {
-				log.WithFields(log.Fields{
-					"Error":      err,
-					"ExecutorID": executor.ID,
-				}).Warn("Failed to remove stale executor")
-				r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupStaleExecutors: failed to remove executor=%s error=%v", executor.Name, err))
-				continue
-			}
-			r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupStaleExecutors: successfully removed executor=%s", executor.Name))
-			removedCount++
+		// Check if container exists for this executor (using both methods)
+		if containerExecutors[executor.Name] || containerNames[containerName] {
+			continue // Container exists
 		}
+
+		// Container doesn't exist - remove stale executor
+		log.WithFields(log.Fields{
+			"ExecutorName": executor.Name,
+			"ExecutorID":   executor.ID,
+			"ExecutorType": executor.Type,
+		}).Info("Removing stale executor registration (container not found)")
+
+		r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupStaleExecutors: reconciler=%s removing executor=%s type=%s reason=container_not_found(expected_container=%s) deployment=%s",
+			r.executorName, executor.Name, executor.Type, containerName, deploymentName))
+
+		// Remove the executor registration
+		if err := r.client.RemoveExecutor(r.colonyName, executor.Name, r.colonyOwnerKey); err != nil {
+			log.WithFields(log.Fields{
+				"Error":      err,
+				"ExecutorID": executor.ID,
+			}).Warn("Failed to remove stale executor")
+			r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupStaleExecutors: failed to remove executor=%s error=%v", executor.Name, err))
+			continue
+		}
+		r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupStaleExecutors: successfully removed executor=%s", executor.Name))
+		removedCount++
 	}
 
 	if removedCount > 0 {

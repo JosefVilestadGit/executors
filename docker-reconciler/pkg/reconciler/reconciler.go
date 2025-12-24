@@ -9,6 +9,7 @@ import (
 	"github.com/colonyos/colonies/pkg/client"
 	"github.com/colonyos/colonies/pkg/core"
 	"github.com/colonyos/executors/common/pkg/docker"
+	"github.com/colonyos/executors/docker-reconciler/pkg/constants"
 	"github.com/docker/docker/api/types"
 	dockerclient "github.com/docker/docker/client"
 	log "github.com/sirupsen/logrus"
@@ -217,17 +218,25 @@ func (r *Reconciler) ForceReconcile(process *core.Process, blueprint *core.Bluep
 	r.addLog(process, fmt.Sprintf("Force reconciling %s - will pull fresh image and recreate all containers", blueprint.Metadata.Name))
 
 	// Extract image(s) from blueprint and force pull them first
+	// Use shorter timeout for force reconcile to fail fast and preserve service availability
 	images, err := r.extractImagesFromBlueprint(blueprint)
 	if err != nil {
-		r.addLog(process, fmt.Sprintf("Warning: Failed to extract images from blueprint: %v", err))
-	} else {
-		for _, image := range images {
-			if err := r.forcePullImage(process, image); err != nil {
-				r.addLog(process, fmt.Sprintf("Warning: Failed to force pull image %s: %v", image, err))
-				// Continue anyway - the image might still work if it exists locally
-			}
-		}
+		r.addLog(process, fmt.Sprintf("ERROR: Failed to extract images from blueprint: %v", err))
+		return fmt.Errorf("failed to extract images from blueprint: %w", err)
 	}
+
+	// Pull all images BEFORE removing any containers
+	// This ensures we don't remove containers if images cannot be pulled
+	r.addLog(process, fmt.Sprintf("Pulling %d image(s) with %s timeout...", len(images), constants.ForceReconcileImagePullTimeout))
+	for _, image := range images {
+		if err := r.forcePullImageWithTimeout(process, image, constants.ForceReconcileImagePullTimeout); err != nil {
+			r.addLog(process, fmt.Sprintf("ERROR: Failed to pull image %s: %v - aborting force reconcile to preserve service availability", image, err))
+			return fmt.Errorf("failed to pull image %s (aborting to preserve running containers): %w", image, err)
+		}
+		r.addLog(process, fmt.Sprintf("Successfully pulled image: %s", image))
+	}
+
+	r.addLog(process, "All images pulled successfully, proceeding to recreate containers...")
 
 	// Get all existing containers for this blueprint
 	existingContainers, err := r.listContainersByLabel(blueprint.Metadata.Name)

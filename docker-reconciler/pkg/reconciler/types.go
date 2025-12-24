@@ -7,6 +7,11 @@ import (
 	"github.com/colonyos/executors/common/pkg/docker"
 )
 
+// ImagePuller defines the interface for pulling container images
+type ImagePuller interface {
+	PullImage(image string, logChan chan docker.LogMessage) error
+}
+
 // DeploymentSpec defines the specification for an executor deployment
 type DeploymentSpec struct {
 	Image        string                 `json:"image"`
@@ -107,7 +112,7 @@ type ResourcesSpec struct {
 
 // Reconciler is the main reconciler struct that handles blueprint reconciliation
 type Reconciler struct {
-	dockerHandler  *docker.DockerHandler
+	dockerHandler  ImagePuller  // Interface for image pulling (testability)
 	dockerClient   DockerClient // Now uses interface for testability
 	client         *client.ColoniesClient
 	executorPrvKey string

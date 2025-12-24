@@ -4,8 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-
-	log "github.com/sirupsen/logrus"
+	"strings"
 )
 
 // generateUniqueHash generates a random 5-character alphanumeric hash
@@ -25,39 +24,30 @@ func generateUniqueHash() string {
 	return hash
 }
 
-// isExecutorNameTaken checks if an executor with the given name already exists in the colony
-func (r *Reconciler) isExecutorNameTaken(colonyName, executorName string) (bool, error) {
-	// Try to get the executor from colonies server
-	executor, err := r.client.GetExecutor(colonyName, executorName, r.executorPrvKey)
-	if err != nil {
-		// If error is "not found", name is available
-		return false, nil
+// generateExecutorName generates a container/executor name with a random hash suffix
+// This does NOT check for duplicates - duplicate handling is done atomically at registration time
+func generateExecutorName(baseExecutorName string) string {
+	hash := generateUniqueHash()
+	return fmt.Sprintf("%s-%s", baseExecutorName, hash)
+}
+
+// isDuplicateExecutorError checks if an error indicates a duplicate executor name
+func isDuplicateExecutorError(err error) bool {
+	if err == nil {
+		return false
 	}
-	// If we got an executor, name is taken
-	return executor != nil, nil
+	errStr := err.Error()
+	return strings.Contains(errStr, "already exists") ||
+		strings.Contains(errStr, "duplicate") ||
+		strings.Contains(errStr, "not unique")
 }
 
 // generateUniqueExecutorName generates a unique executor name with hash suffix
-// It will retry up to 10 times to find an available name
+// Uses atomic registration: tries to register, and retries with new name if duplicate detected
+// This eliminates the race condition in check-then-act patterns
 func (r *Reconciler) generateUniqueExecutorName(colonyName, baseExecutorName string) (string, error) {
-	const maxRetries = 10
-
-	for i := 0; i < maxRetries; i++ {
-		hash := generateUniqueHash()
-		executorName := fmt.Sprintf("%s-%s", baseExecutorName, hash)
-
-		taken, err := r.isExecutorNameTaken(colonyName, executorName)
-		if err != nil {
-			log.WithFields(log.Fields{"Error": err, "ExecutorName": executorName}).Warn("Failed to check if executor name is taken")
-			continue
-		}
-
-		if !taken {
-			return executorName, nil
-		}
-
-		log.WithFields(log.Fields{"ExecutorName": executorName}).Debug("Executor name collision, retrying...")
-	}
-
-	return "", fmt.Errorf("failed to generate unique executor name after %d retries", maxRetries)
+	// Just generate a name - no pre-check needed
+	// The server-side unique constraint will reject duplicates atomically
+	// Duplicate handling happens at registration time (in startContainer)
+	return generateExecutorName(baseExecutorName), nil
 }

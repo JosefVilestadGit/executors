@@ -188,22 +188,43 @@ func (r *Reconciler) reconcileExecutorDeployment(process *core.Process, blueprin
 			var containerName string
 			if blueprint.Kind == "ExecutorDeployment" {
 				// For executor deployments, generate unique name based on blueprint name
-				uniqueExecutorName, err := r.generateUniqueExecutorName(blueprint.Metadata.ColonyName, blueprint.Metadata.Name)
-				if err != nil {
-					r.addLog(process, fmt.Sprintf("Error generating unique executor name: %v", err))
-					return fmt.Errorf("failed to generate unique executor name: %w", err)
+				// Use atomic registration with retry on duplicate
+				const maxRetries = 5
+				var lastErr error
+				for retry := 0; retry < maxRetries; retry++ {
+					uniqueExecutorName, err := r.generateUniqueExecutorName(blueprint.Metadata.ColonyName, blueprint.Metadata.Name)
+					if err != nil {
+						r.addLog(process, fmt.Sprintf("Error generating unique executor name: %v", err))
+						return fmt.Errorf("failed to generate unique executor name: %w", err)
+					}
+					containerName = uniqueExecutorName
+
+					if err := r.startContainer(process, spec, containerName, blueprint); err != nil {
+						if isDuplicateExecutorError(err) {
+							r.addLog(process, fmt.Sprintf("Executor name collision for %s, retrying with new name...", containerName))
+							lastErr = err
+							continue
+						}
+						r.addLog(process, fmt.Sprintf("ERROR: Failed to start container %s: %v", containerName, err))
+						return fmt.Errorf("failed to start container %s: %w", containerName, err)
+					}
+					r.addLog(process, fmt.Sprintf("Started container: %s", containerName))
+					lastErr = nil
+					break
 				}
-				containerName = uniqueExecutorName
+				if lastErr != nil {
+					return fmt.Errorf("failed to start container after %d retries due to name collisions: %w", maxRetries, lastErr)
+				}
 			} else {
 				// For non-executor deployments, use index-based naming
 				containerName = fmt.Sprintf("%s-%d", blueprint.Metadata.Name, currentReplicas+i)
-			}
 
-			if err := r.startContainer(process, spec, containerName, blueprint); err != nil {
-				r.addLog(process, fmt.Sprintf("ERROR: Failed to start container %s: %v", containerName, err))
-				return fmt.Errorf("failed to start container %s: %w", containerName, err)
+				if err := r.startContainer(process, spec, containerName, blueprint); err != nil {
+					r.addLog(process, fmt.Sprintf("ERROR: Failed to start container %s: %v", containerName, err))
+					return fmt.Errorf("failed to start container %s: %w", containerName, err)
+				}
+				r.addLog(process, fmt.Sprintf("Started container: %s", containerName))
 			}
-			r.addLog(process, fmt.Sprintf("Started container: %s", containerName))
 		}
 	} else if currentReplicas > spec.Replicas {
 		// Scale down - stop excess containers
@@ -547,6 +568,13 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 		},
 	}
 
+	// Validate image exists locally before creating container
+	// This provides a clear error if the image is not available
+	if _, _, err := r.dockerClient.ImageInspectWithRaw(ctx, spec.Image); err != nil {
+		r.addErrorLog(process, fmt.Sprintf("Docker: Image %s not found locally - ensure image is pulled before creating container", spec.Image))
+		return fmt.Errorf("image not found: %s (pull the image first)", spec.Image)
+	}
+
 	// Create the container
 	r.addLog(process, fmt.Sprintf("Docker: Creating container %s from image %s", containerName, spec.Image))
 	resp, err := r.dockerClient.ContainerCreate(ctx, config, hostConfig, networkConfig, nil, containerName)
@@ -560,6 +588,10 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 	r.addLog(process, fmt.Sprintf("Docker: Starting container %s", containerName))
 	if err := r.dockerClient.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		r.addErrorLog(process, fmt.Sprintf("Docker: Failed to start container %s: %v", containerName, err))
+		// Cleanup: remove the created container to prevent orphaned containers
+		if removeErr := r.dockerClient.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true}); removeErr != nil {
+			log.WithFields(log.Fields{"Error": removeErr, "ContainerID": resp.ID}).Warn("Failed to cleanup container after start failure")
+		}
 		return fmt.Errorf("failed to start container: %w", err)
 	}
 
@@ -568,6 +600,10 @@ func (r *Reconciler) startContainer(process *core.Process, spec DeploymentSpec, 
 	if err := r.waitForContainerRunning(resp.ID, 30*time.Second); err != nil {
 		// Get container logs on failure to help debugging
 		r.addErrorLog(process, fmt.Sprintf("Docker: Container %s failed to start: %v", containerName, err))
+		// Cleanup: stop and remove the container to prevent orphaned containers
+		if removeErr := r.stopAndRemoveContainer(resp.ID); removeErr != nil {
+			log.WithFields(log.Fields{"Error": removeErr, "ContainerID": resp.ID}).Warn("Failed to cleanup container after wait failure")
+		}
 		return fmt.Errorf("container failed to start: %w", err)
 	}
 

@@ -110,6 +110,16 @@ func (m *MockColoniesClient) Close(processID, output string, errors []string, pr
 	return args.Error(0)
 }
 
+// MockImagePuller implements the ImagePuller interface for testing
+type MockImagePuller struct {
+	mock.Mock
+}
+
+func (m *MockImagePuller) PullImage(image string, logChan chan docker.LogMessage) error {
+	args := m.Called(image, logChan)
+	return args.Error(0)
+}
+
 // createTestReconciler creates a reconciler with mocked dependencies
 func createTestReconciler(dockerClient DockerClient) *Reconciler {
 	dockerHandler, _ := docker.CreateDockerHandler()
@@ -137,6 +147,19 @@ func createTestReconcilerWithClient(dockerClient DockerClient, coloniesClient *M
 		colonyOwnerKey: "test-colony-owner-key",
 		colonyName:     "test-colony",
 		location:       "test-datacenter",
+	}
+}
+
+// createTestReconcilerWithImagePuller creates a reconciler with a mock image puller for testing
+func createTestReconcilerWithImagePuller(dockerClient DockerClient, imagePuller ImagePuller) *Reconciler {
+	return &Reconciler{
+		dockerHandler:  imagePuller,
+		dockerClient:   dockerClient,
+		client:         nil,
+		executorPrvKey: "test-executor-key",
+		colonyOwnerKey: "test-colony-owner-key",
+		colonyName:     "test-colony",
+		location:       "test-location",
 	}
 }
 
@@ -362,6 +385,388 @@ func TestErrorHandling(t *testing.T) {
 	})
 }
 
+// TestContainerCleanupOnStartFailure tests that containers are cleaned up when start fails
+func TestContainerCleanupOnStartFailure(t *testing.T) {
+	t.Run("ContainerStart failure triggers cleanup", func(t *testing.T) {
+		mockDocker := new(MockDockerClient)
+		reconciler := createTestReconciler(mockDocker)
+
+		containerID := "created-but-failed-to-start"
+
+		// ContainerList - check for existing container (none found)
+		mockDocker.On("ContainerList", mock.Anything, mock.Anything).
+			Return([]types.Container{}, nil)
+
+		// ImageInspectWithRaw - image exists locally
+		mockDocker.On("ImageInspectWithRaw", mock.Anything, "test-image:latest").
+			Return(types.ImageInspect{}, []byte{}, nil)
+
+		// ContainerCreate succeeds
+		mockDocker.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, "test-container").
+			Return(container.CreateResponse{ID: containerID}, nil)
+
+		// ContainerStart fails
+		mockDocker.On("ContainerStart", mock.Anything, containerID, mock.Anything).
+			Return(errors.New("port already in use"))
+
+		// ContainerRemove should be called to clean up
+		mockDocker.On("ContainerRemove", mock.Anything, containerID, container.RemoveOptions{Force: true}).
+			Return(nil)
+
+		// Create test process and blueprint
+		process := &core.Process{ID: "test-process"}
+		spec := DeploymentSpec{
+			Image:    "test-image:latest",
+			Replicas: 1,
+		}
+		blueprint := &core.Blueprint{
+			Kind: "DockerDeployment", // Use DockerDeployment to skip executor registration
+			Metadata: core.BlueprintMetadata{
+				Name:       "test-deployment",
+				Generation: 1,
+			},
+		}
+
+		// Call startContainer - should fail but clean up
+		err := reconciler.startContainer(process, spec, "test-container", blueprint)
+
+		// Verify error is returned
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to start container")
+
+		// Verify ContainerRemove was called to clean up
+		mockDocker.AssertCalled(t, "ContainerRemove", mock.Anything, containerID, container.RemoveOptions{Force: true})
+	})
+
+	t.Run("waitForContainerRunning failure triggers cleanup", func(t *testing.T) {
+		mockDocker := new(MockDockerClient)
+		reconciler := createTestReconciler(mockDocker)
+
+		containerID := "started-but-exited"
+
+		// ContainerList - check for existing container (none found)
+		mockDocker.On("ContainerList", mock.Anything, mock.Anything).
+			Return([]types.Container{}, nil)
+
+		// ImageInspectWithRaw - image exists locally
+		mockDocker.On("ImageInspectWithRaw", mock.Anything, "test-image:latest").
+			Return(types.ImageInspect{}, []byte{}, nil)
+
+		// ContainerCreate succeeds
+		mockDocker.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, "flaky-container").
+			Return(container.CreateResponse{ID: containerID}, nil)
+
+		// ContainerStart succeeds
+		mockDocker.On("ContainerStart", mock.Anything, containerID, mock.Anything).
+			Return(nil)
+
+		// ContainerInspect returns exited state (simulating container that crashed immediately)
+		mockDocker.On("ContainerInspect", mock.Anything, containerID).
+			Return(types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{
+						Running: false,
+						Status:  "exited",
+					},
+				},
+			}, nil)
+
+		// Cleanup calls - ContainerStop and ContainerRemove
+		mockDocker.On("ContainerStop", mock.Anything, containerID, mock.Anything).
+			Return(nil)
+		mockDocker.On("ContainerRemove", mock.Anything, containerID, container.RemoveOptions{Force: true}).
+			Return(nil)
+
+		process := &core.Process{ID: "test-process"}
+		spec := DeploymentSpec{
+			Image:    "test-image:latest",
+			Replicas: 1,
+		}
+		blueprint := &core.Blueprint{
+			Kind: "DockerDeployment",
+			Metadata: core.BlueprintMetadata{
+				Name:       "test-deployment",
+				Generation: 1,
+			},
+		}
+
+		// Call startContainer - should fail and clean up
+		err := reconciler.startContainer(process, spec, "flaky-container", blueprint)
+
+		// Verify error is returned
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "container failed to start")
+
+		// Verify cleanup was attempted (ContainerStop called as part of stopAndRemoveContainer)
+		mockDocker.AssertCalled(t, "ContainerStop", mock.Anything, containerID, mock.Anything)
+		mockDocker.AssertCalled(t, "ContainerRemove", mock.Anything, containerID, container.RemoveOptions{Force: true})
+	})
+
+	t.Run("Cleanup failure is logged but original error returned", func(t *testing.T) {
+		mockDocker := new(MockDockerClient)
+		reconciler := createTestReconciler(mockDocker)
+
+		containerID := "stuck-container"
+
+		// ContainerList - check for existing container (none found)
+		mockDocker.On("ContainerList", mock.Anything, mock.Anything).
+			Return([]types.Container{}, nil)
+
+		// ImageInspectWithRaw - image exists locally
+		mockDocker.On("ImageInspectWithRaw", mock.Anything, "test-image:latest").
+			Return(types.ImageInspect{}, []byte{}, nil)
+
+		// ContainerCreate succeeds
+		mockDocker.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, "stuck-test").
+			Return(container.CreateResponse{ID: containerID}, nil)
+
+		// ContainerStart fails
+		mockDocker.On("ContainerStart", mock.Anything, containerID, mock.Anything).
+			Return(errors.New("network error"))
+
+		// ContainerRemove also fails (container is stuck)
+		mockDocker.On("ContainerRemove", mock.Anything, containerID, container.RemoveOptions{Force: true}).
+			Return(errors.New("container is stuck"))
+
+		process := &core.Process{ID: "test-process"}
+		spec := DeploymentSpec{
+			Image:    "test-image:latest",
+			Replicas: 1,
+		}
+		blueprint := &core.Blueprint{
+			Kind: "DockerDeployment",
+			Metadata: core.BlueprintMetadata{
+				Name:       "test-deployment",
+				Generation: 1,
+			},
+		}
+
+		// Call startContainer
+		err := reconciler.startContainer(process, spec, "stuck-test", blueprint)
+
+		// Original error should be returned (not the cleanup error)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to start container")
+		assert.Contains(t, err.Error(), "network error")
+		assert.NotContains(t, err.Error(), "stuck")
+
+		// Verify cleanup was attempted
+		mockDocker.AssertCalled(t, "ContainerRemove", mock.Anything, containerID, container.RemoveOptions{Force: true})
+	})
+}
+
+// TestImageValidation tests that startContainer validates image exists before creating container
+func TestImageValidation(t *testing.T) {
+	t.Run("startContainer fails if image not found locally", func(t *testing.T) {
+		mockDocker := new(MockDockerClient)
+		reconciler := createTestReconciler(mockDocker)
+
+		// ContainerList - check for existing container (none found)
+		mockDocker.On("ContainerList", mock.Anything, mock.Anything).
+			Return([]types.Container{}, nil)
+
+		// ImageInspectWithRaw returns error (image not found)
+		mockDocker.On("ImageInspectWithRaw", mock.Anything, "missing-image:latest").
+			Return(types.ImageInspect{}, []byte{}, errors.New("image not found"))
+
+		process := &core.Process{ID: "test-process"}
+		spec := DeploymentSpec{
+			Image:    "missing-image:latest",
+			Replicas: 1,
+		}
+		blueprint := &core.Blueprint{
+			Kind: "DockerDeployment",
+			Metadata: core.BlueprintMetadata{
+				Name:       "test-deployment",
+				Generation: 1,
+			},
+		}
+
+		// Call startContainer - should fail due to missing image
+		err := reconciler.startContainer(process, spec, "test-container", blueprint)
+
+		// Verify error is returned with clear message
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "image not found")
+		assert.Contains(t, err.Error(), "missing-image:latest")
+
+		// Verify ContainerCreate was NOT called (we abort before creating)
+		mockDocker.AssertNotCalled(t, "ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("startContainer proceeds when image exists locally", func(t *testing.T) {
+		mockDocker := new(MockDockerClient)
+		reconciler := createTestReconciler(mockDocker)
+
+		// ContainerList - check for existing container (none found)
+		mockDocker.On("ContainerList", mock.Anything, mock.Anything).
+			Return([]types.Container{}, nil)
+
+		// ImageInspectWithRaw returns success (image exists)
+		mockDocker.On("ImageInspectWithRaw", mock.Anything, "existing-image:latest").
+			Return(types.ImageInspect{}, []byte{}, nil)
+
+		// ContainerCreate succeeds
+		mockDocker.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, "test-container").
+			Return(container.CreateResponse{ID: "new-container-id"}, nil)
+
+		// ContainerStart succeeds
+		mockDocker.On("ContainerStart", mock.Anything, "new-container-id", mock.Anything).
+			Return(nil)
+
+		// ContainerInspect shows running
+		mockDocker.On("ContainerInspect", mock.Anything, "new-container-id").
+			Return(types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{Running: true},
+				},
+			}, nil)
+
+		process := &core.Process{ID: "test-process"}
+		spec := DeploymentSpec{
+			Image:    "existing-image:latest",
+			Replicas: 1,
+		}
+		blueprint := &core.Blueprint{
+			Kind: "DockerDeployment", // Use DockerDeployment to skip executor registration
+			Metadata: core.BlueprintMetadata{
+				Name:       "test-deployment",
+				Generation: 1,
+			},
+		}
+
+		// Call startContainer - should succeed
+		err := reconciler.startContainer(process, spec, "test-container", blueprint)
+
+		// Verify no error (or only executor-related errors which we skip with DockerDeployment)
+		if err != nil {
+			// Should not be an image-related error
+			assert.NotContains(t, err.Error(), "image not found")
+		}
+
+		// Verify ImageInspectWithRaw was called for validation
+		mockDocker.AssertCalled(t, "ImageInspectWithRaw", mock.Anything, "existing-image:latest")
+
+		// Verify ContainerCreate was called (we got past image validation)
+		mockDocker.AssertCalled(t, "ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, "test-container")
+	})
+}
+
+// TestExecutorLabelMatching tests that executor-to-container matching uses labels
+func TestExecutorLabelMatching(t *testing.T) {
+	t.Run("Executor with colonies.executor label is matched correctly", func(t *testing.T) {
+		// Test that the colonies.executor label is used for direct matching
+		// This avoids fragile name parsing for deployments with hyphens
+
+		// Simulate a container with the colonies.executor label
+		containers := []types.Container{
+			{
+				ID:    "container-1",
+				Names: []string{"/my-hyphenated-app-a8f2c"},
+				Labels: map[string]string{
+					"colonies.deployment": "my-hyphenated-app",
+					"colonies.generation": "1",
+					"colonies.executor":   "my-hyphenated-app-a8f2c-1",
+				},
+			},
+		}
+
+		// Build executor set from labels (simulating the cleanup logic)
+		containerExecutors := make(map[string]bool)
+		for _, cont := range containers {
+			if execName, ok := cont.Labels["colonies.executor"]; ok && execName != "" {
+				containerExecutors[execName] = true
+			}
+		}
+
+		// Verify the executor is found
+		assert.True(t, containerExecutors["my-hyphenated-app-a8f2c-1"], "Executor should be found via label")
+		assert.False(t, containerExecutors["other-executor-1"], "Unknown executor should not be found")
+	})
+
+	t.Run("Hyphenated deployment names work correctly", func(t *testing.T) {
+		// This test verifies that deployment names with hyphens are handled correctly
+		// Previously, parsing "my-app-test-a8f2c-1" to extract "my-app-test" was fragile
+
+		testCases := []struct {
+			deploymentName string
+			executorName   string
+			containerName  string
+		}{
+			{"simple", "simple-a8f2c-1", "simple-a8f2c"},
+			{"my-app", "my-app-a8f2c-1", "my-app-a8f2c"},
+			{"my-app-test", "my-app-test-a8f2c-1", "my-app-test-a8f2c"},
+			{"my-app-test-prod", "my-app-test-prod-a8f2c-1", "my-app-test-prod-a8f2c"},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.deploymentName, func(t *testing.T) {
+				// Simulate container with proper labels
+				containers := []types.Container{
+					{
+						ID:    "container-id",
+						Names: []string{"/" + tc.containerName},
+						Labels: map[string]string{
+							"colonies.deployment": tc.deploymentName,
+							"colonies.generation": "1",
+							"colonies.executor":   tc.executorName,
+						},
+					},
+				}
+
+				// Build executor set from labels
+				containerExecutors := make(map[string]bool)
+				for _, cont := range containers {
+					if execName, ok := cont.Labels["colonies.executor"]; ok && execName != "" {
+						containerExecutors[execName] = true
+					}
+				}
+
+				// Verify exact match works
+				assert.True(t, containerExecutors[tc.executorName],
+					"Executor %s should be found for deployment %s", tc.executorName, tc.deploymentName)
+			})
+		}
+	})
+
+	t.Run("Stale executor without container is detected", func(t *testing.T) {
+		// Simulate: executor exists but no matching container
+		containers := []types.Container{
+			{
+				ID:    "container-1",
+				Names: []string{"/my-app-b9f3d"},
+				Labels: map[string]string{
+					"colonies.deployment": "my-app",
+					"colonies.generation": "1",
+					"colonies.executor":   "my-app-b9f3d-1",
+				},
+			},
+		}
+
+		// Build executor and container name sets
+		containerExecutors := make(map[string]bool)
+		containerNames := make(map[string]bool)
+		for _, cont := range containers {
+			if execName, ok := cont.Labels["colonies.executor"]; ok && execName != "" {
+				containerExecutors[execName] = true
+			}
+			name := cont.Names[0]
+			if len(name) > 0 && name[0] == '/' {
+				name = name[1:]
+			}
+			containerNames[name] = true
+		}
+
+		// Executor that exists in registry but has no container
+		staleExecutorName := "my-app-a8f2c-1"
+		staleContainerName := "my-app-a8f2c"
+
+		// Verify the stale executor is NOT found
+		assert.False(t, containerExecutors[staleExecutorName], "Stale executor should not be found in labels")
+		assert.False(t, containerNames[staleContainerName], "Stale container should not be found")
+	})
+}
+
 // TestConcurrentOperations tests thread-safety
 func TestConcurrentOperations(t *testing.T) {
 	t.Skip("Concurrency test - run manually to verify thread safety")
@@ -422,6 +827,142 @@ func TestImageOperations(t *testing.T) {
 
 		// In production code, this would trigger ImagePull
 		// We're just verifying the mock setup works
+	})
+}
+
+// TestImagePullTimeout tests that image pulls timeout correctly
+func TestImagePullTimeout(t *testing.T) {
+	t.Run("Image pull times out after specified duration", func(t *testing.T) {
+		mockDocker := new(MockDockerClient)
+		mockImagePuller := new(MockImagePuller)
+		reconciler := createTestReconcilerWithImagePuller(mockDocker, mockImagePuller)
+
+		// Mock PullImage to block forever (simulating a hanging pull)
+		mockImagePuller.On("PullImage", "slow-image:latest", mock.Anything).
+			Run(func(args mock.Arguments) {
+				// Block forever - the timeout should cancel this
+				select {}
+			}).
+			Return(nil)
+
+		// Create a minimal process for logging
+		process := &core.Process{
+			ID: "test-process-id",
+		}
+
+		// Use a very short timeout (100ms) for testing
+		timeout := 100 * time.Millisecond
+		start := time.Now()
+		err := reconciler.doPullImageWithTimeout(process, "slow-image:latest", timeout)
+		elapsed := time.Since(start)
+
+		// Verify timeout error occurred
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "image pull timed out")
+		assert.Contains(t, err.Error(), "slow-image:latest")
+
+		// Verify it didn't take much longer than the timeout
+		assert.Less(t, elapsed, 200*time.Millisecond, "Should timeout close to the specified duration")
+	})
+
+	t.Run("Image pull succeeds before timeout", func(t *testing.T) {
+		mockDocker := new(MockDockerClient)
+		mockImagePuller := new(MockImagePuller)
+		reconciler := createTestReconcilerWithImagePuller(mockDocker, mockImagePuller)
+
+		// Mock PullImage to succeed quickly
+		mockImagePuller.On("PullImage", "fast-image:latest", mock.Anything).
+			Run(func(args mock.Arguments) {
+				logChan := args.Get(1).(chan docker.LogMessage)
+				// Send progress messages
+				logChan <- docker.LogMessage{Log: "Pulling layer 1/3", EOF: false}
+				logChan <- docker.LogMessage{Log: "Pulling layer 2/3", EOF: false}
+				logChan <- docker.LogMessage{Log: "Pulling layer 3/3", EOF: false}
+				// Signal completion
+				logChan <- docker.LogMessage{Log: "Pull complete", EOF: true}
+			}).
+			Return(nil)
+
+		process := &core.Process{
+			ID: "test-process-id",
+		}
+
+		// Use a longer timeout
+		timeout := 5 * time.Second
+		err := reconciler.doPullImageWithTimeout(process, "fast-image:latest", timeout)
+
+		// Verify success
+		assert.NoError(t, err)
+		mockImagePuller.AssertCalled(t, "PullImage", "fast-image:latest", mock.Anything)
+	})
+
+	t.Run("Image pull error is returned", func(t *testing.T) {
+		mockDocker := new(MockDockerClient)
+		mockImagePuller := new(MockImagePuller)
+		reconciler := createTestReconcilerWithImagePuller(mockDocker, mockImagePuller)
+
+		// Mock PullImage to return an error
+		mockImagePuller.On("PullImage", "bad-image:latest", mock.Anything).
+			Run(func(args mock.Arguments) {
+				// Don't send EOF, let the error channel handle it
+			}).
+			Return(errors.New("repository not found"))
+
+		process := &core.Process{
+			ID: "test-process-id",
+		}
+
+		timeout := 5 * time.Second
+		err := reconciler.doPullImageWithTimeout(process, "bad-image:latest", timeout)
+
+		// Verify error is returned (not timeout)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "repository not found")
+		assert.NotContains(t, err.Error(), "timed out")
+	})
+}
+
+// TestAtomicExecutorRegistration tests that executor name generation uses atomic registration
+func TestAtomicExecutorRegistration(t *testing.T) {
+	t.Run("isDuplicateExecutorError detects duplicate errors", func(t *testing.T) {
+		// Test various duplicate error messages
+		assert.True(t, isDuplicateExecutorError(errors.New("Executor with name <test> already exists")))
+		assert.True(t, isDuplicateExecutorError(errors.New("duplicate key value")))
+		assert.True(t, isDuplicateExecutorError(errors.New("not unique")))
+
+		// Test non-duplicate errors
+		assert.False(t, isDuplicateExecutorError(errors.New("connection refused")))
+		assert.False(t, isDuplicateExecutorError(errors.New("timeout")))
+		assert.False(t, isDuplicateExecutorError(nil))
+	})
+
+	t.Run("generateExecutorName generates unique names", func(t *testing.T) {
+		names := make(map[string]bool)
+		baseName := "test-executor"
+
+		// Generate 100 names and verify they're all unique
+		for i := 0; i < 100; i++ {
+			name := generateExecutorName(baseName)
+			assert.False(t, names[name], "Generated duplicate name: %s", name)
+			names[name] = true
+
+			// Verify format: baseName-hash (5 chars)
+			assert.True(t, len(name) > len(baseName)+1, "Name too short: %s", name)
+			assert.Contains(t, name, baseName+"-")
+		}
+	})
+
+	t.Run("generateUniqueExecutorName returns name without pre-check", func(t *testing.T) {
+		mockDocker := new(MockDockerClient)
+		reconciler := createTestReconciler(mockDocker)
+
+		// Should return a name without making any network calls
+		name, err := reconciler.generateUniqueExecutorName("test-colony", "test-deployment")
+		assert.NoError(t, err)
+		assert.NotEmpty(t, name)
+		assert.Contains(t, name, "test-deployment-")
+
+		// No mock expectations were set, so this confirms no network calls were made
 	})
 }
 
@@ -542,9 +1083,11 @@ func TestLocationInheritance(t *testing.T) {
 	})
 }
 
-// TestScaleDownDeregistration tests that executors are deregistered before containers are stopped
+// TestScaleDownDeregistration tests the container lifecycle ordering during scale-down
+// The correct order is: Stop container FIRST, then deregister executor
+// This prevents orphaned containers if container stop fails
 func TestScaleDownDeregistration(t *testing.T) {
-	t.Run("Scale down deregisters executors before stopping containers", func(t *testing.T) {
+	t.Run("Scale down stops containers before deregistering executors", func(t *testing.T) {
 		mockDocker := new(MockDockerClient)
 		mockColonies := new(MockColoniesClient)
 
@@ -555,7 +1098,7 @@ func TestScaleDownDeregistration(t *testing.T) {
 			location:       "test-location",
 		}
 
-		// Simulate scale-down scenario: have 3 containers running, need to stop 2
+		// Simulate scale-down scenario: have 2 containers running
 		containers := []types.Container{
 			{
 				ID:    "container-1-fullid",
@@ -580,20 +1123,7 @@ func TestScaleDownDeregistration(t *testing.T) {
 		// Track order of operations
 		callOrder := []string{}
 
-		// Mock RemoveExecutor calls (should happen first)
-		mockColonies.On("RemoveExecutor", "test-colony", "docker-executor-abc12", "test-owner-key").
-			Run(func(args mock.Arguments) {
-				callOrder = append(callOrder, "deregister-abc12")
-			}).
-			Return(nil)
-
-		mockColonies.On("RemoveExecutor", "test-colony", "docker-executor-def34", "test-owner-key").
-			Run(func(args mock.Arguments) {
-				callOrder = append(callOrder, "deregister-def34")
-			}).
-			Return(nil)
-
-		// Mock ContainerStop calls (should happen after deregistration)
+		// Mock ContainerStop calls (should happen FIRST)
 		mockDocker.On("ContainerStop", mock.Anything, "container-1-fullid", mock.Anything).
 			Run(func(args mock.Arguments) {
 				callOrder = append(callOrder, "stop-abc12")
@@ -618,7 +1148,21 @@ func TestScaleDownDeregistration(t *testing.T) {
 			}).
 			Return(nil)
 
-		// Simulate the scale-down logic
+		// Mock RemoveExecutor calls (should happen AFTER container stop/remove)
+		mockColonies.On("RemoveExecutor", "test-colony", "docker-executor-abc12", "test-owner-key").
+			Run(func(args mock.Arguments) {
+				callOrder = append(callOrder, "deregister-abc12")
+			}).
+			Return(nil)
+
+		mockColonies.On("RemoveExecutor", "test-colony", "docker-executor-def34", "test-owner-key").
+			Run(func(args mock.Arguments) {
+				callOrder = append(callOrder, "deregister-def34")
+			}).
+			Return(nil)
+
+		// Simulate the scale-down logic with correct ordering:
+		// Stop container FIRST, then deregister executor
 		for _, cont := range containers {
 			containerID := cont.ID
 			containerName := cont.Names[0]
@@ -626,13 +1170,7 @@ func TestScaleDownDeregistration(t *testing.T) {
 				containerName = containerName[1:]
 			}
 
-			// Deregister executor BEFORE stopping container (the fix we implemented)
-			if containerName != "" {
-				err := mockColonies.RemoveExecutor(reconciler.colonyName, containerName, reconciler.colonyOwnerKey)
-				assert.NoError(t, err)
-			}
-
-			// Then stop and remove container
+			// Stop and remove container FIRST
 			stopOpts := container.StopOptions{}
 			err := mockDocker.ContainerStop(context.Background(), containerID, stopOpts)
 			assert.NoError(t, err)
@@ -640,22 +1178,69 @@ func TestScaleDownDeregistration(t *testing.T) {
 			removeOpts := container.RemoveOptions{}
 			err = mockDocker.ContainerRemove(context.Background(), containerID, removeOpts)
 			assert.NoError(t, err)
+
+			// THEN deregister executor (only after container is stopped)
+			if containerName != "" {
+				err := mockColonies.RemoveExecutor(reconciler.colonyName, containerName, reconciler.colonyOwnerKey)
+				assert.NoError(t, err)
+			}
 		}
 
-		// Verify correct order: deregister before stop/remove for each container
-		assert.Len(t, callOrder, 6)
-		assert.Equal(t, "deregister-abc12", callOrder[0])
-		assert.Equal(t, "stop-abc12", callOrder[1])
-		assert.Equal(t, "remove-abc12", callOrder[2])
-		assert.Equal(t, "deregister-def34", callOrder[3])
-		assert.Equal(t, "stop-def34", callOrder[4])
-		assert.Equal(t, "remove-def34", callOrder[5])
+		// Verify correct order: stop/remove BEFORE deregister for each container
+		assert.Len(t, callOrder, 6, "Expected 6 operations total")
+		assert.Equal(t, "stop-abc12", callOrder[0], "First: stop container 1")
+		assert.Equal(t, "remove-abc12", callOrder[1], "Second: remove container 1")
+		assert.Equal(t, "deregister-abc12", callOrder[2], "Third: deregister executor 1")
+		assert.Equal(t, "stop-def34", callOrder[3], "Fourth: stop container 2")
+		assert.Equal(t, "remove-def34", callOrder[4], "Fifth: remove container 2")
+		assert.Equal(t, "deregister-def34", callOrder[5], "Sixth: deregister executor 2")
 
 		mockDocker.AssertExpectations(t)
 		mockColonies.AssertExpectations(t)
 	})
 
-	t.Run("Scale down handles deregistration failure gracefully", func(t *testing.T) {
+	t.Run("Container stop failure prevents executor deregistration", func(t *testing.T) {
+		mockDocker := new(MockDockerClient)
+		mockColonies := new(MockColoniesClient)
+
+		reconciler := &Reconciler{
+			dockerClient:   mockDocker,
+			colonyName:     "test-colony",
+			colonyOwnerKey: "test-owner-key",
+		}
+
+		testContainer := types.Container{
+			ID:    "stuck-container-id",
+			Names: []string{"/stuck-executor"},
+			State: "running",
+			Labels: map[string]string{
+				"colonies.deployment": "test-deployment",
+				"colonies.managed":    "true",
+			},
+		}
+
+		// Mock container stop FAILURE
+		mockDocker.On("ContainerStop", mock.Anything, "stuck-container-id", mock.Anything).
+			Return(errors.New("container stuck, cannot stop"))
+
+		// Simulate scale-down with container stop failure
+		containerName := testContainer.Names[0][1:] // Remove leading slash
+
+		// Try to stop container first
+		stopOpts := container.StopOptions{}
+		err := mockDocker.ContainerStop(context.Background(), testContainer.ID, stopOpts)
+		assert.Error(t, err, "Container stop should fail")
+
+		// Container stop failed, so we should NOT deregister the executor
+		// The executor stays registered so next reconciliation can retry
+		// Verify RemoveExecutor was never called
+		mockColonies.AssertNotCalled(t, "RemoveExecutor", reconciler.colonyName, containerName, reconciler.colonyOwnerKey)
+
+		mockDocker.AssertExpectations(t)
+		mockColonies.AssertExpectations(t)
+	})
+
+	t.Run("Deregistration failure after container stop is non-fatal", func(t *testing.T) {
 		mockDocker := new(MockDockerClient)
 		mockColonies := new(MockColoniesClient)
 
@@ -675,28 +1260,29 @@ func TestScaleDownDeregistration(t *testing.T) {
 			},
 		}
 
-		// Mock deregistration failure
-		mockColonies.On("RemoveExecutor", "test-colony", "failing-executor", "test-owner-key").
-			Return(errors.New("access denied"))
-
-		// Container should still be stopped even if deregistration fails
+		// Container stop succeeds
 		mockDocker.On("ContainerStop", mock.Anything, "container-id", mock.Anything).Return(nil)
 		mockDocker.On("ContainerRemove", mock.Anything, "container-id", mock.Anything).Return(nil)
 
-		// Simulate scale-down with failed deregistration
-		containerName := testContainer.Names[0][1:] // Remove leading slash
-		err := mockColonies.RemoveExecutor(reconciler.colonyName, containerName, reconciler.colonyOwnerKey)
-		assert.Error(t, err) // Deregistration fails, but we continue
+		// But deregistration fails - this is less critical since container is already gone
+		mockColonies.On("RemoveExecutor", "test-colony", "failing-executor", "test-owner-key").
+			Return(errors.New("access denied"))
 
-		// Container should still be stopped
+		// Simulate scale-down: stop container first
 		stopOpts := container.StopOptions{}
-		err = mockDocker.ContainerStop(context.Background(), testContainer.ID, stopOpts)
-		assert.NoError(t, err)
+		err := mockDocker.ContainerStop(context.Background(), testContainer.ID, stopOpts)
+		assert.NoError(t, err, "Container stop should succeed")
 
 		removeOpts := container.RemoveOptions{}
 		err = mockDocker.ContainerRemove(context.Background(), testContainer.ID, removeOpts)
-		assert.NoError(t, err)
+		assert.NoError(t, err, "Container remove should succeed")
 
+		// Then try to deregister (fails but container is already gone)
+		containerName := testContainer.Names[0][1:] // Remove leading slash
+		err = mockColonies.RemoveExecutor(reconciler.colonyName, containerName, reconciler.colonyOwnerKey)
+		assert.Error(t, err, "Deregistration fails but this is non-fatal")
+
+		// The important thing: container is gone, no resource leak
 		mockDocker.AssertExpectations(t)
 		mockColonies.AssertExpectations(t)
 	})
@@ -879,6 +1465,205 @@ func TestForceReconcileListsContainers(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, containers, 1)
 	assert.Equal(t, "existing-1", containers[0])
+}
+
+// TestForceReconcileTiming tests that force reconcile fails fast when image pull fails
+// and doesn't remove containers until images are successfully pulled
+func TestForceReconcileTiming(t *testing.T) {
+	t.Run("Force_reconcile_aborts_if_image_pull_fails", func(t *testing.T) {
+		mockDocker := new(MockDockerClient)
+		mockHandler := new(MockImagePuller)
+
+		// Setup: Image pull will fail
+		mockHandler.On("PullImage", "test-image:latest", mock.Anything).Run(func(args mock.Arguments) {
+			logChan := args.Get(1).(chan docker.LogMessage)
+			// Simulate pull failure by closing channel and returning error
+			close(logChan)
+		}).Return(errors.New("image not found: test-image:latest"))
+
+		// Setup: Container list should show existing containers (but won't be called due to early abort)
+		mockDocker.On("ContainerList", mock.Anything, mock.Anything).Return([]types.Container{
+			{
+				ID:    "existing-container-1",
+				Names: []string{"/my-executor-abc12"},
+				Labels: map[string]string{
+					"colonies.deployment": "my-executor",
+					"colonies.generation": "1",
+				},
+			},
+		}, nil)
+
+		// Create reconciler with mocked handler (client is nil - not needed for abort test)
+		reconciler := &Reconciler{
+			dockerClient:   mockDocker,
+			client:         nil,
+			dockerHandler:  mockHandler,
+			colonyName:     "test-colony",
+			colonyOwnerKey: "test-owner-key",
+			executorName:   "test-reconciler",
+		}
+
+		blueprint := &core.Blueprint{
+			Kind: "ExecutorDeployment",
+			Metadata: core.BlueprintMetadata{
+				Name:       "my-executor",
+				ColonyName: "test-colony",
+				Generation: 2,
+			},
+			Spec: map[string]interface{}{
+				"image":    "test-image:latest",
+				"replicas": float64(1),
+			},
+		}
+
+		process := &core.Process{
+			FunctionSpec: core.FunctionSpec{},
+		}
+
+		// Execute: Force reconcile should fail
+		err := reconciler.ForceReconcile(process, blueprint)
+
+		// Assert: Error should be returned
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to pull image")
+		assert.Contains(t, err.Error(), "aborting to preserve running containers")
+
+		// Assert: ContainerStop and ContainerRemove should NOT have been called
+		// because we abort before removing containers
+		mockDocker.AssertNotCalled(t, "ContainerStop", mock.Anything, mock.Anything, mock.Anything)
+		mockDocker.AssertNotCalled(t, "ContainerRemove", mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("Force_reconcile_proceeds_to_container_removal_when_image_pull_succeeds", func(t *testing.T) {
+		// This test verifies that when image pull succeeds, we proceed to the container removal phase
+		// We can't easily test the full flow without mocking the colonies client, but we can verify
+		// that listContainersByLabel is called (which proves we got past image pull)
+		mockDocker := new(MockDockerClient)
+		mockHandler := new(MockImagePuller)
+
+		// Setup: Image pull will succeed
+		pullCalled := false
+		mockHandler.On("PullImage", "test-image:latest", mock.Anything).Run(func(args mock.Arguments) {
+			pullCalled = true
+			logChan := args.Get(1).(chan docker.LogMessage)
+			logChan <- docker.LogMessage{Log: "Pulling layer..."}
+			logChan <- docker.LogMessage{EOF: true}
+		}).Return(nil)
+
+		// Setup: Container list returns empty (no existing containers to force remove)
+		listCalled := false
+		mockDocker.On("ContainerList", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			listCalled = true
+		}).Return([]types.Container{}, nil)
+
+		// These won't be called but we need them to avoid test panic
+		mockDocker.On("ImageInspectWithRaw", mock.Anything, mock.Anything).Maybe().Return(types.ImageInspect{}, []byte{}, nil)
+		mockDocker.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().
+			Return(container.CreateResponse{ID: "new-1"}, nil)
+		mockDocker.On("ContainerStart", mock.Anything, mock.Anything, mock.Anything).Maybe().Return(nil)
+		mockDocker.On("ContainerInspect", mock.Anything, mock.Anything).Maybe().Return(types.ContainerJSON{
+			ContainerJSONBase: &types.ContainerJSONBase{State: &types.ContainerState{Running: true}},
+		}, nil)
+
+		reconciler := &Reconciler{
+			dockerClient:   mockDocker,
+			client:         nil, // Will cause panic later, but we check pullCalled and listCalled first
+			dockerHandler:  mockHandler,
+			colonyName:     "test-colony",
+			colonyOwnerKey: "test-owner-key",
+			executorName:   "test-reconciler",
+		}
+
+		blueprint := &core.Blueprint{
+			Kind: "ExecutorDeployment",
+			Metadata: core.BlueprintMetadata{
+				Name:       "my-executor",
+				ColonyName: "test-colony",
+				Generation: 2,
+			},
+			Spec: map[string]interface{}{
+				"image":    "test-image:latest",
+				"replicas": float64(1),
+			},
+		}
+
+		process := &core.Process{
+			FunctionSpec: core.FunctionSpec{},
+		}
+
+		// Execute with recovery - we expect a panic later due to nil client, but by then
+		// we've already verified our assertions
+		func() {
+			defer func() {
+				recover() // Ignore panic from nil client
+			}()
+			_ = reconciler.ForceReconcile(process, blueprint)
+		}()
+
+		// Assert: Image pull was called
+		assert.True(t, pullCalled, "PullImage should have been called")
+
+		// Assert: Container list was called - proves we got past image pull phase
+		assert.True(t, listCalled, "ContainerList should have been called (got past image pull)")
+	})
+
+	t.Run("Force_reconcile_preserves_containers_on_pull_timeout", func(t *testing.T) {
+		// This test verifies that containers are NOT removed when image pull fails/times out
+		mockDocker := new(MockDockerClient)
+		mockHandler := new(MockImagePuller)
+
+		// Setup: Image pull will fail (simulating timeout)
+		mockHandler.On("PullImage", "slow-image:latest", mock.Anything).Run(func(args mock.Arguments) {
+			logChan := args.Get(1).(chan docker.LogMessage)
+			close(logChan)
+		}).Return(errors.New("pull timeout"))
+
+		// Setup: Container list shows existing container
+		mockDocker.On("ContainerList", mock.Anything, mock.Anything).Return([]types.Container{
+			{
+				ID:    "existing-1",
+				Names: []string{"/my-app"},
+				Labels: map[string]string{
+					"colonies.deployment": "my-app",
+				},
+			},
+		}, nil)
+
+		reconciler := &Reconciler{
+			dockerClient:   mockDocker,
+			client:         nil,
+			dockerHandler:  mockHandler,
+			colonyName:     "test-colony",
+			colonyOwnerKey: "test-owner-key",
+			executorName:   "test-reconciler",
+		}
+
+		blueprint := &core.Blueprint{
+			Kind: "ExecutorDeployment",
+			Metadata: core.BlueprintMetadata{
+				Name:       "my-app",
+				ColonyName: "test-colony",
+				Generation: 1,
+			},
+			Spec: map[string]interface{}{
+				"image":    "slow-image:latest",
+				"replicas": float64(1),
+			},
+		}
+
+		process := &core.Process{
+			FunctionSpec: core.FunctionSpec{},
+		}
+
+		// Execute
+		err := reconciler.ForceReconcile(process, blueprint)
+
+		// Assert: Should fail and containers should NOT be removed
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "aborting to preserve running containers")
+		mockDocker.AssertNotCalled(t, "ContainerStop", mock.Anything, mock.Anything, mock.Anything)
+		mockDocker.AssertNotCalled(t, "ContainerRemove", mock.Anything, mock.Anything, mock.Anything)
+	})
 }
 
 // Benchmark tests

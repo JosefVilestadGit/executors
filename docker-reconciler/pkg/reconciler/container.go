@@ -7,6 +7,7 @@ import (
 
 	"github.com/colonyos/colonies/pkg/core"
 	"github.com/colonyos/executors/common/pkg/docker"
+	"github.com/colonyos/executors/docker-reconciler/pkg/constants"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	log "github.com/sirupsen/logrus"
@@ -35,9 +36,25 @@ func (r *Reconciler) forcePullImage(process *core.Process, image string) error {
 	return r.doPullImage(process, image)
 }
 
-// doPullImage performs the actual image pull
+// forcePullImageWithTimeout pulls an image with a custom timeout
+// Used by ForceReconcile with a shorter timeout to fail fast
+func (r *Reconciler) forcePullImageWithTimeout(process *core.Process, image string, timeout time.Duration) error {
+	r.addLog(process, fmt.Sprintf("Force pulling image (ignoring local cache): %s", image))
+	return r.doPullImageWithTimeout(process, image, timeout)
+}
+
+// doPullImage performs the actual image pull with timeout
 func (r *Reconciler) doPullImage(process *core.Process, image string) error {
-	r.addLog(process, fmt.Sprintf("Pulling image: %s", image))
+	return r.doPullImageWithTimeout(process, image, constants.ImagePullTimeout)
+}
+
+// doPullImageWithTimeout performs the actual image pull with a configurable timeout
+// This is separated for testability
+func (r *Reconciler) doPullImageWithTimeout(process *core.Process, image string, timeout time.Duration) error {
+	r.addLog(process, fmt.Sprintf("Pulling image: %s (timeout: %s)", image, timeout))
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
 	logChan := make(chan docker.LogMessage, 100)
 	errChan := make(chan error, 1)
@@ -51,6 +68,8 @@ func (r *Reconciler) doPullImage(process *core.Process, image string) error {
 
 	for {
 		select {
+		case <-ctx.Done():
+			return fmt.Errorf("image pull timed out after %s: %s", timeout, image)
 		case err := <-errChan:
 			return err
 		case msg := <-logChan:
