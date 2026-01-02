@@ -2,7 +2,7 @@ all: build
 .PHONY: all build container push clean buildx-setup multiplatform multiplatform-push
 
 BUILD_IMAGE ?= colonyos/docker-reconciler
-PUSH_IMAGE ?= colonyos/docker-reconciler:v1.0.7
+PUSH_IMAGE ?= colonyos/docker-reconciler:v1.0.9
 PLATFORMS ?= linux/amd64,linux/arm64
 
 VERSION := $(shell git rev-parse --short HEAD)
@@ -26,6 +26,8 @@ container:
 push:
 	docker tag $(BUILD_IMAGE) $(PUSH_IMAGE)
 	docker push $(PUSH_IMAGE)
+	docker tag $(BUILD_IMAGE) $(BUILD_IMAGE):latest
+	docker push $(BUILD_IMAGE):latest
 
 # Setup buildx for multiplatform builds
 buildx-setup:
@@ -49,6 +51,7 @@ multiplatform-push: buildx-setup
 		--build-arg VERSION=$(VERSION) \
 		--build-arg BUILDTIME=$(BUILDTIME) \
 		-t $(PUSH_IMAGE) \
+		-t $(BUILD_IMAGE):latest \
 		--push \
 		.
 

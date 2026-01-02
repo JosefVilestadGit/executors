@@ -70,23 +70,14 @@ func (e *Executor) handleConsolidatedReconcile(process *core.Process, kind strin
 		return
 	}
 
-	// Filter blueprints that are assigned to this executor
-	// If blueprintName is specified, also filter to only that blueprint
+	// Filter to specific blueprint if blueprintName is specified
+	// Location filtering is done by GetBlueprintsByLocation API
 	var blueprints []*core.Blueprint
 	for _, blueprint := range allBlueprints {
-		// If a specific blueprint name is requested, skip others
 		if blueprintName != "" && blueprint.Metadata.Name != blueprintName {
 			continue
 		}
-		if e.shouldHandleBlueprint(blueprint) {
-			blueprints = append(blueprints, blueprint)
-		} else {
-			log.WithFields(log.Fields{
-				"BlueprintName":   blueprint.Metadata.Name,
-				"HandlerExecutor": getHandlerExecutorType(blueprint),
-				"MyExecutorName":  e.executorName,
-			}).Debug("Skipping blueprint not assigned to this executor")
-		}
+		blueprints = append(blueprints, blueprint)
 	}
 
 	if len(blueprints) == 0 {

@@ -121,11 +121,12 @@ func parseEnv() {
 	}
 
 	// COLONIES_TLS controls whether to use HTTPS (true) or HTTP (false)
+	// Default to insecure (HTTP) if not set
 	coloniesTLSStr := os.Getenv("COLONIES_TLS")
-	if coloniesTLSStr == "false" {
-		coloniesInsecure = true
-	} else {
+	if coloniesTLSStr == "true" {
 		coloniesInsecure = false
+	} else {
+		coloniesInsecure = true
 	}
 
 	colonyName = os.Getenv("COLONIES_COLONY_NAME")

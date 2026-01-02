@@ -155,9 +155,9 @@ func (r *Reconciler) FindOrphanedContainers(process *core.Process, blueprint *co
 
 // shouldHandleBlueprint returns true if this reconciler should handle the given blueprint
 // Process routing already handles executor type and location targeting
+// Handler config is now verified by the server via BlueprintDefinition
 func (r *Reconciler) shouldHandleBlueprint(blueprint *core.Blueprint) bool {
-	// Blueprint must have a handler defined
-	return blueprint.Handler != nil
+	return true
 }
 
 // HasOldGenerationContainers checks if any containers have old generation labels

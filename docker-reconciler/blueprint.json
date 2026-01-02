@@ -4,9 +4,6 @@
     "name": "docker-executor-demo",
     "locationname": "dev"
   },
-  "handler": {
-    "executorType": "docker-reconciler"
-  },
   "spec": {
     "image": "colonyos/dockerexecutor:latest",
     "replicas": 1,

@@ -154,6 +154,13 @@ func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
 		log.WithFields(log.Fields{"Error": err}).Warning("Failed to add reconcile function")
 	}
 
+	// Register the cleanup function (triggered when blueprints are deleted)
+	cleanupFunction := &core.Function{ExecutorName: e.executorName, ColonyName: e.colonyName, FuncName: "cleanup"}
+	_, err = e.client.AddFunction(cleanupFunction, e.executorPrvKey)
+	if err != nil {
+		log.WithFields(log.Fields{"Error": err}).Warning("Failed to add cleanup function")
+	}
+
 	// Get location from environment for child executors
 	e.location = os.Getenv("COLONIES_EXECUTOR_LOCATION")
 	if e.location == "" {

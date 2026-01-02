@@ -2,7 +2,6 @@ package executor
 
 import (
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/colonyos/colonies/pkg/core"
@@ -95,19 +94,8 @@ func (e *Executor) performStartupReconciliation() {
 		return
 	}
 
-	// Filter blueprints that are assigned to this executor
-	var myBlueprints []*core.Blueprint
-	for _, blueprint := range blueprints {
-		if e.shouldHandleBlueprint(blueprint) {
-			myBlueprints = append(myBlueprints, blueprint)
-		} else {
-			log.WithFields(log.Fields{
-				"BlueprintName":   blueprint.Metadata.Name,
-				"HandlerExecutor": getHandlerExecutorType(blueprint),
-				"MyExecutorName":  e.executorName,
-			}).Debug("Skipping blueprint not assigned to this executor")
-		}
-	}
+	// All blueprints are handled - filtering by location is done by GetBlueprints API
+	myBlueprints := blueprints
 
 	if len(myBlueprints) == 0 {
 		log.WithFields(log.Fields{
@@ -190,35 +178,8 @@ func (e *Executor) performStartupReconciliation() {
 }
 
 // shouldHandleBlueprint returns true if this executor should handle the given blueprint
-// Checks that the handler executor type and location match this reconciler's configuration
+// Process routing and GetBlueprintsByLocation already filter by executor type and location
+// This function is kept for any future filtering needs but currently always returns true
 func (e *Executor) shouldHandleBlueprint(blueprint *core.Blueprint) bool {
-	// Blueprint must have a handler defined
-	if blueprint.Handler == nil {
-		return false
-	}
-
-	// Check executor type matches
-	if blueprint.Handler.ExecutorType != e.executorType {
-		return false
-	}
-
-	// Check location matches (case-insensitive)
-	blueprintLocation := strings.ToLower(blueprint.Metadata.LocationName)
-	myLocation := strings.ToLower(e.location)
-	if blueprintLocation != myLocation {
-		return false
-	}
-
 	return true
-}
-
-// getHandlerExecutorType returns the executor type from the blueprint handler for logging
-func getHandlerExecutorType(blueprint *core.Blueprint) string {
-	if blueprint.Handler == nil {
-		return "<no handler>"
-	}
-	if blueprint.Handler.ExecutorType != "" {
-		return blueprint.Handler.ExecutorType
-	}
-	return "<no executor type specified>"
 }
