@@ -30,7 +30,7 @@ RUN CGO_ENABLED=0 \
     -o docker_executor ./cmd/main.go
 
 # Final stage - use colonies base image
-FROM colonyos/colonies:v1.8.7
+FROM colonyos/colonies:v1.9.5
 
 WORKDIR /
 COPY --from=builder /build/executors/docker-executor/docker_executor /bin/

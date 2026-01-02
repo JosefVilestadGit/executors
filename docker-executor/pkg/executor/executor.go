@@ -300,9 +300,7 @@ func (e *Executor) createColoniesExecutorWithKey(colonyName string) (*core.Execu
 			},
 		},
 	}
-	executor.Location.Description = e.locDesc
-	executor.Location.Long = e.long
-	executor.Location.Lat = e.lat
+	executor.LocationName = e.locDesc
 
 	return executor, executorID, executorPrvKey, nil
 }

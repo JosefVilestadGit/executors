@@ -2,7 +2,7 @@ all: build
 .PHONY: all build container push clean buildx-setup multiplatform multiplatform-push
 
 BUILD_IMAGE ?= colonyos/dockerexecutor
-PUSH_IMAGE ?= colonyos/dockerexecutor:v1.0.8
+PUSH_IMAGE ?= colonyos/dockerexecutor:v1.0.9
 PLATFORMS ?= linux/amd64,linux/arm64
 
 VERSION := $(shell git rev-parse --short HEAD)
