@@ -506,7 +506,7 @@ func (r *Reconciler) CleanupStaleExecutors(process *core.Process, deploymentName
 }
 
 // CleanupDeletedBlueprint removes all containers and executors for a deleted blueprint
-func (r *Reconciler) CleanupDeletedBlueprint(process *core.Process, blueprintName string) error {
+func (r *Reconciler) CleanupDeletedBlueprint(process *core.Process, blueprintName string, kind string) error {
 	ctx := context.Background()
 
 	// List ALL containers for this deployment (including stopped)
@@ -551,10 +551,12 @@ func (r *Reconciler) CleanupDeletedBlueprint(process *core.Process, blueprintNam
 			"ContainerID":   truncateID(cont.ID, 12),
 			"ContainerName": containerName,
 			"State":         cont.State,
+			"Generation":    generation,
 		}).Info("Removing container for deleted blueprint")
 
 		// Deregister executor if this was an ExecutorDeployment
-		if containerName != "" && generation > 0 {
+		// The executor name format is containerName-generation
+		if kind == "ExecutorDeployment" && containerName != "" {
 			executorName := fmt.Sprintf("%s-%d", containerName, generation)
 
 			r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupDeletedBlueprint: reconciler=%s removing executor=%s reason=blueprint_deleted blueprint=%s generation=%d",
@@ -564,12 +566,12 @@ func (r *Reconciler) CleanupDeletedBlueprint(process *core.Process, blueprintNam
 				log.WithFields(log.Fields{
 					"Error":        err,
 					"ExecutorName": executorName,
-				}).Debug("Failed to deregister executor (may already be removed)")
+				}).Warn("Failed to deregister executor")
 				r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupDeletedBlueprint: failed to remove executor=%s error=%v", executorName, err))
 			} else {
 				log.WithFields(log.Fields{
 					"ExecutorName": executorName,
-				}).Debug("Deregistered executor for deleted blueprint")
+				}).Info("Deregistered executor for deleted blueprint")
 				r.addLog(process, fmt.Sprintf("[EXECUTOR_REMOVAL] CleanupDeletedBlueprint: successfully removed executor=%s", executorName))
 			}
 		}

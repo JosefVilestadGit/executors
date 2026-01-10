@@ -239,13 +239,17 @@ func (e *Executor) handleCleanup(process *core.Process) {
 		return
 	}
 
+	// Extract blueprint kind from process kwargs
+	kind, _ := process.FunctionSpec.KwArgs["kind"].(string)
+
 	log.WithFields(log.Fields{
 		"BlueprintName": blueprintName,
+		"Kind":          kind,
 	}).Info("Cleaning up containers for deleted blueprint")
-	e.addProcessLog(process, fmt.Sprintf("Cleaning up containers for deleted blueprint: %s", blueprintName))
+	e.addProcessLog(process, fmt.Sprintf("Cleaning up containers for deleted blueprint: %s (kind: %s)", blueprintName, kind))
 
 	// Cleanup containers using the reconciler's cleanup method
-	if err := e.reconciler.CleanupDeletedBlueprint(process, blueprintName); err != nil {
+	if err := e.reconciler.CleanupDeletedBlueprint(process, blueprintName, kind); err != nil {
 		errMsg := fmt.Sprintf("Cleanup failed for %s: %v", blueprintName, err)
 		e.addProcessLog(process, errMsg)
 		e.failProcess(process, errMsg)
