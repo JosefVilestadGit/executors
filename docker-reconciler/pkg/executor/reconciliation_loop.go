@@ -82,30 +82,34 @@ func (e *Executor) handleUnsupportedFunction(process *core.Process) {
 func (e *Executor) performStartupReconciliation() {
 	log.Info("Performing startup reconciliation of all blueprints")
 
-	// Get all blueprints in the colony
-	blueprints, err := e.client.GetBlueprints(e.colonyName, "", e.colonyPrvKey)
+	// Get blueprints filtered by location for both kinds
+	var myBlueprints []*core.Blueprint
+
+	// Fetch ExecutorDeployment blueprints for this location
+	executorBlueprints, err := e.client.GetBlueprintsByLocation(e.colonyName, "ExecutorDeployment", e.location, e.colonyPrvKey)
 	if err != nil {
-		log.WithFields(log.Fields{"Error": err}).Error("Failed to fetch blueprints for startup reconciliation")
-		return
+		log.WithFields(log.Fields{"Error": err, "Kind": "ExecutorDeployment"}).Error("Failed to fetch blueprints for startup reconciliation")
+	} else {
+		myBlueprints = append(myBlueprints, executorBlueprints...)
 	}
 
-	if len(blueprints) == 0 {
-		log.Info("No blueprints found for startup reconciliation")
-		return
+	// Fetch DockerDeployment blueprints for this location
+	dockerBlueprints, err := e.client.GetBlueprintsByLocation(e.colonyName, "DockerDeployment", e.location, e.colonyPrvKey)
+	if err != nil {
+		log.WithFields(log.Fields{"Error": err, "Kind": "DockerDeployment"}).Error("Failed to fetch blueprints for startup reconciliation")
+	} else {
+		myBlueprints = append(myBlueprints, dockerBlueprints...)
 	}
-
-	// All blueprints are handled - filtering by location is done by GetBlueprints API
-	myBlueprints := blueprints
 
 	if len(myBlueprints) == 0 {
-		log.WithFields(log.Fields{
-			"TotalBlueprints": len(blueprints),
-			"ExecutorName":    e.executorName,
-		}).Info("No blueprints assigned to this executor for startup reconciliation")
+		log.WithFields(log.Fields{"Location": e.location}).Info("No blueprints found for this location on startup reconciliation")
 		return
 	}
 
-	log.WithFields(log.Fields{"Count": len(myBlueprints), "Total": len(blueprints)}).Info("Starting reconciliation of assigned blueprints")
+	log.WithFields(log.Fields{
+		"Count":    len(myBlueprints),
+		"Location": e.location,
+	}).Info("Starting reconciliation of blueprints for this location")
 
 	// Reconcile each blueprint
 	reconciledCount := 0
