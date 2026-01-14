@@ -1,0 +1,9 @@
+{
+    "conditions": {
+        "executortype": "echo-executor"
+    },
+    "funcname": "echo",
+    "args": [
+        "hello world"
+    ]
+}

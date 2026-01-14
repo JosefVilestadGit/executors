@@ -7,20 +7,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const TimeLayout = "2006-01-02 15:04:05"
-const KEYCHAIN_PATH = ".colonies"
-
 var Verbose bool
 var ColoniesServerHost string
 var ColoniesServerPort int
 var ColoniesInsecure bool
-var ColoniesSkipTLSVerify bool
 var ColoniesUseTLS bool
-var ColonyID string
-var ColonyPrvKey string
+var ColonyName string
 var ExecutorName string
-var ExecutorID string
-var ExecutorType string
 var ExecutorPrvKey string
 
 func init() {

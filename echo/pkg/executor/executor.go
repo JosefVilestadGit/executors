@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,7 +11,6 @@ import (
 
 	"github.com/colonyos/colonies/pkg/client"
 	"github.com/colonyos/colonies/pkg/core"
-	"github.com/colonyos/colonies/pkg/security/crypto"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -18,9 +18,8 @@ type Executor struct {
 	coloniesServerHost string
 	coloniesServerPort int
 	coloniesInsecure   bool
-	colonyID           string
-	colonyPrvKey       string
-	executorID         string
+	colonyName         string
+	executorName       string
 	executorPrvKey     string
 	ctx                context.Context
 	cancel             context.CancelFunc
@@ -47,21 +46,15 @@ func WithColoniesInsecure(insecure bool) ExecutorOption {
 	}
 }
 
-func WithColonyID(id string) ExecutorOption {
+func WithColonyName(name string) ExecutorOption {
 	return func(e *Executor) {
-		e.colonyID = id
+		e.colonyName = name
 	}
 }
 
-func WithColonyPrvKey(prvkey string) ExecutorOption {
+func WithExecutorName(name string) ExecutorOption {
 	return func(e *Executor) {
-		e.colonyPrvKey = prvkey
-	}
-}
-
-func WithExecutorID(id string) ExecutorOption {
-	return func(e *Executor) {
-		e.executorID = id
+		e.executorName = name
 	}
 }
 
@@ -71,25 +64,18 @@ func WithExecutorPrvKey(key string) ExecutorOption {
 	}
 }
 
-func createExecutorWithKey(colonyID string) (*core.Executor, string, string, error) {
-	crypto := crypto.CreateCrypto()
-	executorPrvKey, err := crypto.GeneratePrivateKey()
-	if err != nil {
-		return nil, "", "", err
-	}
-
-	executorID, err := crypto.GenerateID(executorPrvKey)
-	if err != nil {
-		return nil, "", "", err
-	}
-
-	return core.CreateExecutor(executorID, "echo", core.GenerateRandomID(), colonyID, time.Now(), time.Now()), executorID, executorPrvKey, nil
-}
-
 func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
 	e := &Executor{}
 	for _, opt := range opts {
 		opt(e)
+	}
+
+	// Validate required fields
+	if e.executorName == "" {
+		return nil, fmt.Errorf("executor name is required (set COLONIES_EXECUTOR_NAME)")
+	}
+	if e.executorPrvKey == "" {
+		return nil, fmt.Errorf("executor private key is required (set COLONIES_PRVKEY)")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -106,49 +92,32 @@ func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
 
 	e.client = client.CreateColoniesClient(e.coloniesServerHost, e.coloniesServerPort, e.coloniesInsecure, false)
 
-	if e.colonyPrvKey != "" {
-		spec, executorID, executorPrvKey, err := createExecutorWithKey(e.colonyID)
-		if err != nil {
-			return nil, err
-		}
-		e.executorID = executorID
-		e.executorPrvKey = executorPrvKey
-
-		_, err = e.client.AddExecutor(spec, e.colonyPrvKey)
-		if err != nil {
-			return nil, err
-		}
-		err = e.client.ApproveExecutor(e.executorID, e.colonyPrvKey)
-		if err != nil {
-			return nil, err
-		}
-
-		function := &core.Function{ExecutorID: e.executorID, ColonyID: e.colonyID, FuncName: "echo", Desc: "Echo executor", Args: []string{"text::string"}}
-
-		_, err = e.client.AddFunction(function, e.executorPrvKey)
-		log.WithFields(log.Fields{"ExecutorID": e.executorID}).Info("Self-registered")
+	// Register the echo function (executor is already registered by docker-reconciler)
+	function := &core.Function{
+		ExecutorName: e.executorName,
+		ColonyName:   e.colonyName,
+		FuncName:     "echo",
 	}
+
+	_, err := e.client.AddFunction(function, e.executorPrvKey)
+	if err != nil {
+		log.WithFields(log.Fields{"Error": err}).Warning("Failed to add function")
+	}
+
+	log.WithFields(log.Fields{"ExecutorName": e.executorName}).Info("Started executor")
 
 	return e, nil
 }
 
 func (e *Executor) Shutdown() error {
-	log.Info("Shutting down")
-	if e.colonyPrvKey != "" {
-		err := e.client.DeleteExecutor(e.executorID, e.colonyPrvKey)
-		if err != nil {
-			log.WithFields(log.Fields{"ExecutorID": e.executorID}).Warning("Failed to deregistered")
-		}
-
-		log.WithFields(log.Fields{"ExecutorID": e.executorID}).Info("Deregistered")
-	}
+	log.WithFields(log.Fields{"ExecutorName": e.executorName}).Info("Shutting down")
 	e.cancel()
 	return nil
 }
 
 func (e *Executor) ServeForEver() error {
 	for {
-		process, err := e.client.AssignWithContext(e.colonyID, 100, e.ctx, e.executorPrvKey)
+		process, err := e.client.AssignWithContext(e.colonyName, 100, e.ctx, "", "", e.executorPrvKey)
 		if err != nil {
 			var coloniesError *core.ColoniesError
 			if errors.As(err, &coloniesError) {
@@ -165,7 +134,7 @@ func (e *Executor) ServeForEver() error {
 			continue
 		}
 
-		log.WithFields(log.Fields{"ProcessID": process.ID, "ExecutorID": e.executorID}).Info("Assigned process to executor")
+		log.WithFields(log.Fields{"ProcessID": process.ID, "ExecutorName": e.executorName}).Info("Assigned process to executor")
 
 		funcName := process.FunctionSpec.FuncName
 		if funcName == "echo" {
@@ -183,12 +152,18 @@ func (e *Executor) ServeForEver() error {
 
 			log.WithFields(log.Fields{"Text": text}).Info("Executing echo function")
 
+			// Add log entry so it shows up with --follow
+			e.client.AddLog(process.ID, text, e.executorPrvKey)
+
+			// Small delay to ensure log is persisted before closing
+			time.Sleep(100 * time.Millisecond)
+
 			output := make([]interface{}, 1)
 			output[0] = text
 			err = e.client.CloseWithOutput(process.ID, output, e.executorPrvKey)
 			log.Info("Closing process")
 		} else {
-			log.WithFields(log.Fields{"ProcessID": process.ID, "ExecutorID": e.executorID, "FuncName": funcName}).Info("Unsupported function")
+			log.WithFields(log.Fields{"ProcessID": process.ID, "ExecutorName": e.executorName, "FuncName": funcName}).Info("Unsupported function")
 			err = e.client.Fail(process.ID, []string{"Unsupported function: " + funcName}, e.executorPrvKey)
 			log.Info(err)
 		}

@@ -5,7 +5,6 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/colonyos/colonies/pkg/security"
 	"github.com/colonyos/executors/echo/pkg/build"
 	"github.com/colonyos/executors/echo/pkg/executor"
 	log "github.com/sirupsen/logrus"
@@ -32,9 +31,8 @@ var startCmd = &cobra.Command{
 			"ColoniesServerHost": ColoniesServerHost,
 			"ColoniesServerPort": ColoniesServerPort,
 			"ColoniesInsecure":   ColoniesInsecure,
-			"ColonyId":           ColonyID,
-			"ColonyPrvKey":       "***********************",
-			"ExecutorId":         ExecutorID,
+			"ColonyName":         ColonyName,
+			"ExecutorName":       ExecutorName,
 			"ExecutorPrvKey":     "***********************"}).
 			Info("Starting a Colonies Echo executor")
 
@@ -42,9 +40,8 @@ var startCmd = &cobra.Command{
 			executor.WithColoniesServerHost(ColoniesServerHost),
 			executor.WithColoniesServerPort(ColoniesServerPort),
 			executor.WithColoniesInsecure(ColoniesInsecure),
-			executor.WithColonyID(ColonyID),
-			executor.WithColonyPrvKey(ColonyPrvKey),
-			executor.WithExecutorID(ExecutorID),
+			executor.WithColonyName(ColonyName),
+			executor.WithExecutorName(ExecutorName),
 			executor.WithExecutorPrvKey(ExecutorPrvKey),
 		)
 		CheckError(err)
@@ -83,33 +80,25 @@ func parseEnv() {
 		Verbose = false
 	}
 
-	if ColonyID == "" {
-		ColonyID = os.Getenv("COLONIES_COLONY_ID")
+	if ColonyName == "" {
+		ColonyName = os.Getenv("COLONIES_COLONY_NAME")
 	}
-	if ColonyID == "" {
-		CheckError(errors.New("Unknown Colony Id"))
-	}
-
-	if ColonyPrvKey == "" {
-		ColonyPrvKey = os.Getenv("COLONIES_COLONY_PRVKEY")
+	if ColonyName == "" {
+		CheckError(errors.New("COLONIES_COLONY_NAME is required"))
 	}
 
-	if ExecutorID == "" {
-		ExecutorID = os.Getenv("COLONIES_EXECUTOR_ID")
+	if ExecutorName == "" {
+		ExecutorName = os.Getenv("COLONIES_EXECUTOR_NAME")
 	}
-	if ExecutorID == "" {
-		CheckError(errors.New("Unknown Executor Id"))
+	if ExecutorName == "" {
+		CheckError(errors.New("COLONIES_EXECUTOR_NAME is required (injected by docker-reconciler)"))
 	}
-
-	keychain, err := security.CreateKeychain(KEYCHAIN_PATH)
-	CheckError(err)
 
 	if ExecutorPrvKey == "" {
-		ExecutorPrvKey = os.Getenv("COLONIES_EXECUTOR_PRVKEY")
+		ExecutorPrvKey = os.Getenv("COLONIES_PRVKEY")
 	}
 	if ExecutorPrvKey == "" {
-		ExecutorPrvKey, err = keychain.GetPrvKey(ExecutorID)
-		CheckError(err)
+		CheckError(errors.New("COLONIES_PRVKEY is required (injected by docker-reconciler)"))
 	}
 }
 
