@@ -5,7 +5,6 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/colonyos/colonies/pkg/security"
 	"github.com/colonyos/executors/sleep/pkg/build"
 	"github.com/colonyos/executors/sleep/pkg/executor"
 	log "github.com/sirupsen/logrus"
@@ -119,15 +118,12 @@ func parseEnv() {
 	if ExecutorName == "" {
 		ExecutorName = os.Getenv("COLONIES_EXECUTOR_NAME")
 	}
-	keychain, err := security.CreateKeychain(KEYCHAIN_PATH)
-	CheckError(err)
 
 	if ExecutorPrvKey == "" {
 		ExecutorPrvKey = os.Getenv("COLONIES_EXECUTOR_PRVKEY")
 	}
 	if ExecutorPrvKey == "" {
-		ExecutorPrvKey, err = keychain.GetPrvKey(ExecutorID)
-		CheckError(err)
+		ExecutorPrvKey = os.Getenv("COLONIES_PRVKEY")
 	}
 
 	LocDesc = os.Getenv("EXECUTOR_LOCATION_DESC")

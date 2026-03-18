@@ -120,9 +120,7 @@ func (e *Executor) createExecutorWithKey(colonyName string) (*core.Executor, str
 	}
 
 	executor := core.CreateExecutor(executorID, "sleep-executor", e.executorName, colonyName, time.Now(), time.Now())
-	executor.Location.Description = e.locDesc
-	executor.Location.Long = e.long
-	executor.Location.Lat = e.lat
+	executor.LocationName = e.locDesc
 
 	return executor, executorID, executorPrvKey, nil
 }
@@ -164,7 +162,17 @@ func CreateExecutor(opts ...ExecutorOption) (*Executor, error) {
 			return nil, err
 		}
 
-		function := &core.Function{ExecutorName: e.executorName, ColonyName: e.colonyName, FuncName: "sleep"}
+		function := core.CreateFunctionWithDesc(
+			e.executorName,
+			"sleep-executor",
+			e.colonyName,
+			"sleep",
+			"Sleep for a given number of milliseconds and return the duration and an optional message",
+			[]*core.FunctionArg{
+				core.CreateFunctionArg("sleepMs", "string", "Duration to sleep in milliseconds", true, nil),
+				core.CreateFunctionArg("message", "string", "Optional message to return in the output", false, nil),
+			},
+		)
 
 		_, err = e.client.AddFunction(function, e.executorPrvKey)
 		log.WithFields(log.Fields{"ExecutorID": e.executorID}).Info("Self-registered")
@@ -209,26 +217,44 @@ func (e *Executor) ServeForEver() error {
 
 		funcName := process.FunctionSpec.FuncName
 		if funcName == "sleep" {
-			if len(process.FunctionSpec.Args) != 1 {
+			if len(process.FunctionSpec.Args) < 1 {
+				err = e.client.Fail(process.ID, []string{"expected at least 1 argument: sleepMs"}, e.executorPrvKey)
 				log.Info(err)
-				err = e.client.Fail(process.ID, []string{"Invalid argument"}, e.executorPrvKey)
+				continue
 			}
-			timeToSleepIf := process.FunctionSpec.Args[0]
-			timeToSleepStr, ok := timeToSleepIf.(string)
+
+			timeToSleepStr, ok := process.FunctionSpec.Args[0].(string)
 			if !ok {
+				err = e.client.Fail(process.ID, []string{"arg[0] (sleepMs) must be a string"}, e.executorPrvKey)
 				log.Info(err)
-				err = e.client.Fail(process.ID, []string{"Invalid argument, not string"}, e.executorPrvKey)
+				continue
 			}
 			timeToSleep, err := strconv.Atoi(timeToSleepStr)
 			if err != nil {
+				err = e.client.Fail(process.ID, []string{"arg[0] (sleepMs) could not be converted to int"}, e.executorPrvKey)
 				log.Info(err)
-				err = e.client.Fail(process.ID, []string{"Invalid argument, could not convert to int"}, e.executorPrvKey)
+				continue
 			}
 
-			log.WithFields(log.Fields{"TimeToSleep": timeToSleep}).Info("Executing sleep function")
+			message := ""
+			if len(process.FunctionSpec.Args) >= 2 {
+				message, ok = process.FunctionSpec.Args[1].(string)
+				if !ok {
+					err = e.client.Fail(process.ID, []string{"arg[1] (message) must be a string"}, e.executorPrvKey)
+					log.Info(err)
+					continue
+				}
+			}
+
+			log.WithFields(log.Fields{"TimeToSleep": timeToSleep, "Message": message}).Info("Executing sleep function")
 
 			time.Sleep(time.Duration(timeToSleep) * time.Millisecond)
-			err = e.client.Close(process.ID, e.executorPrvKey)
+
+			output := []interface{}{timeToSleep, message}
+			err = e.client.CloseWithOutput(process.ID, output, e.executorPrvKey)
+			if err != nil {
+				log.WithFields(log.Fields{"ProcessID": process.ID, "Error": err}).Error("Failed to close process")
+			}
 
 			log.Info("Closing process")
 		} else {
